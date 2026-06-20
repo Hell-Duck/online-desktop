@@ -185,23 +185,50 @@ function start(room) {
   });
 
   /* --- Картинки --- */
+  // Добавить картинку из dataURL (base64). pos — куда поставить (по умолчанию угол).
+  function addImage(dataURL, pos) {
+    fabric.Image.fromURL(dataURL, (img) => {
+      const scale = Math.min(1, 400 / img.width);
+      img.set({
+        left: pos ? pos.x : 80,
+        top: pos ? pos.y : 80,
+        scaleX: scale, scaleY: scale, id: uid(),
+      });
+      canvas.add(img); // object:added транслирует картинку (base64) остальным
+      canvas.setActiveObject(img);
+      canvas.requestRenderAll();
+    });
+  }
+
+  function readFileAsImage(file, pos) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => addImage(ev.target.result, pos);
+    reader.readAsDataURL(file);
+  }
+
   const imageInput = document.getElementById('imageInput');
   document.getElementById('imageBtn').onclick = () => imageInput.click();
   imageInput.onchange = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      fabric.Image.fromURL(ev.target.result, (img) => {
-        const scale = Math.min(1, 400 / img.width);
-        img.set({ left: 80, top: 80, scaleX: scale, scaleY: scale, id: uid() });
-        canvas.add(img); // object:added транслирует картинку (base64)
-        canvas.setActiveObject(img);
-      });
-    };
-    reader.readAsDataURL(file);
+    readFileAsImage(e.target.files[0]);
     imageInput.value = '';
   };
+
+  // Вставка картинки из буфера обмена (Ctrl+V)
+  window.addEventListener('paste', (e) => {
+    // не перехватываем вставку, если редактируется текст на доске
+    const active = canvas.getActiveObject();
+    if (active && active.isEditing) return;
+
+    const items = (e.clipboardData || window.clipboardData)?.items || [];
+    for (const item of items) {
+      if (item.type && item.type.startsWith('image/')) {
+        e.preventDefault();
+        readFileAsImage(item.getAsFile());
+        return;
+      }
+    }
+  });
 
   /* --- Удаление / очистка --- */
   function deleteActive() {
