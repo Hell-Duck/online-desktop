@@ -14,7 +14,8 @@ const toolbar = document.getElementById('toolbar');
 const roomInput = document.getElementById('roomInput');
 
 function enterRoom(room) {
-  room = (room || '').trim();
+  // нормализуем код: без пробелов и в нижнем регистре, чтобы "AbC" и "abc " совпадали
+  room = (room || '').trim().toLowerCase();
   if (!room) return;
   const url = new URL(location.href);
   url.searchParams.set('room', room);
