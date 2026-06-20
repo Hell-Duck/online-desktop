@@ -65,6 +65,7 @@
     <button data-tool="rect" title="Прямоугольник">▭</button>
     <button data-tool="circle" title="Круг">◯</button>
     <button data-tool="line" title="Линия">╱</button>
+    <button data-tool="eraser" title="Стёрка (удаляет объект целиком)">🧽</button>
     <div class="sep"></div>
     <input type="color" id="color" value="#222222" title="Цвет" />
     <button id="imageBtn" title="Вставить картинку">🖼 Картинка</button>
@@ -77,6 +78,7 @@
   <canvas id="board"></canvas>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.0/fabric.min.js"></script>
+  <script src="/fabric-eraser.js"></script><!-- модуль пиксельного ластика (нет в основной сборке) -->
   <script src="/socket.io/socket.io.js"></script>
   <script src="/client.js"></script>
 </body>

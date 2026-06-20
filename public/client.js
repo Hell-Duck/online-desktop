@@ -4,7 +4,8 @@ const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(
 // Включаем поле id в сериализацию объектов Fabric, чтобы сопоставлять их между клиентами
 fabric.Object.prototype.toObject = (function (orig) {
   return function (props) {
-    return orig.call(this, ['id'].concat(props || []));
+    // 'eraser' нужен, чтобы стёртые части объекта корректно передавались другому участнику
+    return orig.call(this, ['id', 'eraser'].concat(props || []));
   };
 })(fabric.Object.prototype.toObject);
 
@@ -78,6 +79,13 @@ function start(room) {
     if (applyingRemote) return;
     if (e.target && e.target.id) socket.emit('object:removed', { id: e.target.id });
   });
+  // Ластик стёр части объектов -> разослать обновлённые объекты (с маской eraser) остальным
+  canvas.on('erasing:end', (e) => {
+    if (applyingRemote || !e || !e.targets) return;
+    e.targets.forEach((obj) => {
+      if (obj.id) socket.emit('object:modified', serialize(obj));
+    });
+  });
 
   /* --- Применение удалённых изменений --- */
   function upsert(json) {
@@ -114,17 +122,27 @@ function start(room) {
   socket.on('peers', (n) => { document.getElementById('peerCount').textContent = n; });
 
   /* ---------- Инструменты ---------- */
+  // Кисти: карандаш и пиксельный ластик (EraserBrush стирает части объектов, а не объект целиком)
+  const penBrush = new fabric.PencilBrush(canvas);
+  const eraserBrush = fabric.EraserBrush ? new fabric.EraserBrush(canvas) : null;
+  if (!eraserBrush) console.warn('EraserBrush недоступен в этой сборке Fabric.js');
+
   const toolButtons = toolbar.querySelectorAll('button[data-tool]');
   function setTool(tool) {
+    if (tool === 'eraser' && !eraserBrush) return; // нет ластика в сборке — игнорируем
     currentTool = tool;
     toolButtons.forEach((b) => b.classList.toggle('active', b.dataset.tool === tool));
-    canvas.isDrawingMode = tool === 'pen';
+    canvas.isDrawingMode = tool === 'pen' || tool === 'eraser';
     canvas.selection = tool === 'select';
     canvas.defaultCursor = tool === 'select' ? 'default' : 'crosshair';
     canvas.forEachObject((o) => (o.selectable = tool === 'select'));
     if (tool === 'pen') {
-      canvas.freeDrawingBrush.color = currentColor;
-      canvas.freeDrawingBrush.width = 3;
+      canvas.freeDrawingBrush = penBrush;
+      penBrush.color = currentColor;
+      penBrush.width = 3;
+    } else if (tool === 'eraser') {
+      canvas.freeDrawingBrush = eraserBrush;
+      eraserBrush.width = 20;
     }
   }
   toolButtons.forEach((b) => (b.onclick = () => setTool(b.dataset.tool)));
@@ -145,7 +163,8 @@ function start(room) {
   let draft = null, startX = 0, startY = 0;
 
   canvas.on('mouse:down', (opt) => {
-    if (currentTool === 'select' || currentTool === 'pen') return;
+    // карандаш и ластик рисуются самим Fabric (isDrawingMode), мышью фигуры тут не строим
+    if (currentTool === 'select' || currentTool === 'pen' || currentTool === 'eraser') return;
     const p = canvas.getPointer(opt.e);
     startX = p.x; startY = p.y;
 
