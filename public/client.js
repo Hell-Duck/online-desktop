@@ -339,25 +339,24 @@ function start(room) {
   });
 
   /* --- Картинки --- */
-  // Добавить картинку из dataURL (base64). pos — куда поставить (по умолчанию угол).
-  function addImage(dataURL, pos) {
+  // Добавить картинку из dataURL (base64), центром в точке point (сцена). По умолчанию — центр экрана.
+  function addImage(dataURL, point) {
     fabric.Image.fromURL(dataURL, (img) => {
       const scale = Math.min(1, 400 / img.width);
-      img.set({
-        left: pos ? pos.x : 80,
-        top: pos ? pos.y : 80,
-        scaleX: scale, scaleY: scale, id: uid(),
-      });
+      img.set({ scaleX: scale, scaleY: scale, id: uid() });
+      const p = point || viewportCenterScene();
+      img.setPositionByOrigin(new fabric.Point(p.x, p.y), 'center', 'center');
+      img.setCoords();
       canvas.add(img); // object:added транслирует картинку (base64) остальным
       canvas.setActiveObject(img);
       canvas.requestRenderAll();
     });
   }
 
-  function readFileAsImage(file, pos) {
+  function readFileAsImage(file, point) {
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => addImage(ev.target.result, pos);
+    reader.onload = (ev) => addImage(ev.target.result, point);
     reader.readAsDataURL(file);
   }
 
@@ -427,7 +426,7 @@ function start(room) {
     for (const item of items) {
       if (item.type && item.type.startsWith('image/')) {
         e.preventDefault();
-        readFileAsImage(item.getAsFile());
+        readFileAsImage(item.getAsFile(), lastClient ? clientToScene(lastClient.x, lastClient.y) : null);
         return;
       }
     }
