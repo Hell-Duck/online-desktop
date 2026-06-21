@@ -163,6 +163,7 @@ function start(room) {
     if (existing) canvas.remove(existing);
     fabric.util.enlivenObjects([json], ([obj]) => {
       obj.id = json.id;
+      obj.erasable = !(currentTool === 'eraser-soft' && obj.type === 'image'); // защита картинок в мягком режиме
       canvas.add(obj);
       cacheObj(obj); // запоминаем состояние чужого объекта для возможной отмены его перемещения
       canvas.requestRenderAll();
@@ -203,11 +204,17 @@ function start(room) {
   if (!eraserBrush) console.warn('EraserBrush недоступен в этой сборке Fabric.js');
 
   const toolButtons = toolbar.querySelectorAll('button[data-tool]');
+  const isEraserTool = (t) => t === 'eraser' || t === 'eraser-soft';
+  // В «мягком» режиме (eraser-soft) помечаем картинки erasable:false — ластик их пропускает
+  function refreshErasable() {
+    const protectImages = currentTool === 'eraser-soft';
+    canvas.forEachObject((o) => { o.erasable = !(protectImages && o.type === 'image'); });
+  }
   function setTool(tool) {
-    if (tool === 'eraser' && !eraserBrush) return; // нет ластика в сборке — игнорируем
+    if (isEraserTool(tool) && !eraserBrush) return; // нет ластика в сборке — игнорируем
     currentTool = tool;
     toolButtons.forEach((b) => b.classList.toggle('active', b.dataset.tool === tool));
-    canvas.isDrawingMode = tool === 'pen' || tool === 'eraser';
+    canvas.isDrawingMode = tool === 'pen' || isEraserTool(tool);
     canvas.selection = tool === 'select';
     canvas.defaultCursor = tool === 'pan' ? 'grab' : (tool === 'select' ? 'default' : 'crosshair');
     canvas.forEachObject((o) => (o.selectable = tool === 'select'));
@@ -215,9 +222,10 @@ function start(room) {
       canvas.freeDrawingBrush = penBrush;
       penBrush.color = currentColor;
       penBrush.width = 3;
-    } else if (tool === 'eraser') {
+    } else if (isEraserTool(tool)) {
       canvas.freeDrawingBrush = eraserBrush;
       eraserBrush.width = 20;
+      refreshErasable(); // обновляем защиту картинок под выбранный режим ластика
     }
   }
   toolButtons.forEach((b) => (b.onclick = () => setTool(b.dataset.tool)));
@@ -280,8 +288,8 @@ function start(room) {
       lastPosY = opt.e.clientY;
       return;
     }
-    // карандаш и ластик рисуются самим Fabric (isDrawingMode), мышью фигуры тут не строим
-    if (currentTool === 'select' || currentTool === 'pen' || currentTool === 'eraser') return;
+    // карандаш и ластики рисуются самим Fabric (isDrawingMode), мышью фигуры тут не строим
+    if (currentTool === 'select' || currentTool === 'pen' || isEraserTool(currentTool)) return;
     const p = canvas.getPointer(opt.e);
     startX = p.x; startY = p.y;
 
@@ -343,7 +351,7 @@ function start(room) {
   function addImage(dataURL, point) {
     fabric.Image.fromURL(dataURL, (img) => {
       const scale = Math.min(1, 400 / img.width);
-      img.set({ scaleX: scale, scaleY: scale, id: uid() });
+      img.set({ scaleX: scale, scaleY: scale, id: uid(), erasable: currentTool !== 'eraser-soft' });
       const p = point || viewportCenterScene();
       img.setPositionByOrigin(new fabric.Point(p.x, p.y), 'center', 'center');
       img.setCoords();
