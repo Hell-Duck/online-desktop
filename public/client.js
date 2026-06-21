@@ -654,6 +654,13 @@ function start(room) {
     socket.emit('canvas:cleared');
   };
 
+  // Выход из комнаты: отключаемся и возвращаемся на экран входа (без ?room в адресе)
+  document.getElementById('exitBtn').onclick = () => {
+    if (!confirm('Выйти из комнаты?')) return;
+    socket.disconnect();          // второй участник увидит уменьшение числа участников
+    window.location = location.pathname; // перезагрузка на лобби — полностью сбрасывает состояние
+  };
+
   /* --- Вид листа (белый / линейка / клетка) --- */
   // Фон рисуется паттерном; backgroundVpt=true по умолчанию => линии двигаются и масштабируются вместе с полотном
   function makeSheetTile(type) {
