@@ -77,8 +77,14 @@ io.on('connection', (socket) => {
     if (currentRoom) socket.to(currentRoom).emit('sheet:set', data);
   });
 
+  // Курсор участника (вне истории) — транслируем остальным с пометкой отправителя
+  socket.on('cursor', (data) => {
+    if (currentRoom) socket.to(currentRoom).emit('cursor', { from: socket.id, ...data });
+  });
+
   socket.on('disconnect', () => {
     if (!currentRoom) return;
+    io.to(currentRoom).emit('cursor', { from: socket.id, visible: false }); // убрать курсор ушедшего
     const count = io.sockets.adapter.rooms.get(currentRoom)?.size || 0;
     io.to(currentRoom).emit('peers', count);
     if (count === 0) roomHistory.delete(currentRoom); // комната опустела — забываем историю

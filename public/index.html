@@ -63,6 +63,10 @@
     #exitBtn { margin-left: 10px; border-color: #ef4444; color: #ef4444; }
     #exitBtn:hover { background: #ef4444; color: #fff; }
     canvas { display: block; }
+
+    /* Курсоры других участников */
+    #cursorLayer { display: none; position: fixed; top: 52px; left: 0; right: 0; bottom: 0; pointer-events: none; overflow: hidden; z-index: 30; }
+    .remote-cursor { position: absolute; transform: translate(-3px, -2px); transition: left .05s linear, top .05s linear; }
   </style>
 </head>
 <body>
@@ -101,6 +105,8 @@
     <button id="imageBtn" title="Вставить картинку">🖼 Картинка</button>
     <button id="deleteBtn" title="Удалить выбранное">🗑</button>
     <button id="resetViewBtn" title="Сбросить масштаб и позицию">⤢ Вид</button>
+    <button id="cursorBtn" title="Показывать мой курсор другому участнику">👁 Курсор</button>
+    <button id="findBtn" title="Перенестись к курсору другого участника">🎯 К курсору</button>
     <button id="saveBtn" title="Сохранить доску в PNG (всё нарисованное)">💾 Сохранить</button>
     <button id="clearBtn" title="Очистить доску">Очистить</button>
     <input type="file" id="imageInput" accept="image/*" style="display:none" />
@@ -117,6 +123,7 @@
   </div>
 
   <canvas id="board"></canvas>
+  <div id="cursorLayer"></div><!-- курсоры других участников -->
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.0/fabric.min.js"></script>
   <script src="/fabric-eraser.js"></script><!-- модуль пиксельного ластика (нет в основной сборке) -->

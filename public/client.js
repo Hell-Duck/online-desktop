@@ -400,6 +400,7 @@ function start(room) {
     canvas.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, zoom);
     opt.e.preventDefault();
     opt.e.stopPropagation();
+    renderCursors(); // пересчитать положение чужих курсоров под новый масштаб
   });
 
   // Пробел временно включает «руку» (как в графических редакторах)
@@ -420,6 +421,7 @@ function start(room) {
   document.getElementById('resetViewBtn').onclick = () => {
     canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
     canvas.requestRenderAll();
+    renderCursors();
   };
 
   /* --- Рисование фигур мышью --- */
@@ -463,6 +465,7 @@ function start(room) {
       lastPosX = opt.e.clientX;
       lastPosY = opt.e.clientY;
       canvas.requestRenderAll();
+      renderCursors(); // курсоры других смещаются вместе с полотном
       return;
     }
     if (!draft) return;
@@ -737,6 +740,77 @@ function start(room) {
     applySheet(e.target.value);
     socket.emit('sheet:set', { type: currentSheet }); // синхронизируем вид со вторым участником
   });
+
+  /* --- Курсор для другого участника --- */
+  let sharingCursor = false;
+  let lastCursorSent = 0;
+  const remoteCursors = {}; // from -> { x, y, visible, el }
+  const cursorLayer = document.getElementById('cursorLayer');
+  cursorLayer.style.display = 'block';
+
+  function cursorEl(from) {
+    let c = remoteCursors[from];
+    if (!c) c = remoteCursors[from] = { x: null, y: null, visible: false, el: null };
+    if (!c.el) {
+      const el = document.createElement('div');
+      el.className = 'remote-cursor';
+      el.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24"><path d="M4 2 L4 19 L9 14 L12 21 L15 20 L12 13 L19 13 Z" fill="#e11d48" stroke="#fff" stroke-width="1.5"/></svg>';
+      cursorLayer.appendChild(el);
+      c.el = el;
+    }
+    return c;
+  }
+  function placeCursor(c) {
+    if (!c.el) return;
+    if (c.visible && c.x != null) {
+      const vpt = canvas.viewportTransform; // сцена -> экран (без вращения)
+      c.el.style.left = (vpt[0] * c.x + vpt[4]) + 'px';
+      c.el.style.top = (vpt[3] * c.y + vpt[5]) + 'px';
+      c.el.style.display = 'block';
+    } else {
+      c.el.style.display = 'none';
+    }
+  }
+  function renderCursors() { Object.keys(remoteCursors).forEach((k) => placeCursor(remoteCursors[k])); }
+
+  socket.on('cursor', (d) => {
+    const c = cursorEl(d.from);
+    if (d.visible) { c.x = d.x; c.y = d.y; c.visible = true; } else { c.visible = false; }
+    placeCursor(c);
+  });
+
+  const sendCursor = (x, y, visible) => socket.emit('cursor', visible ? { x, y, visible: true } : { visible: false });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!sharingCursor) return;
+    const now = Date.now();
+    if (now - lastCursorSent < 40) return; // не чаще ~25 раз/сек
+    const p = clientToScene(e.clientX, e.clientY);
+    if (!p) return; // курсор над тулбаром/вне доски — не обновляем
+    lastCursorSent = now;
+    sendCursor(p.x, p.y, true);
+  });
+  // мышь ушла за пределы окна сайта или вкладка скрыта -> курсор у других исчезает
+  document.addEventListener('mouseleave', () => { if (sharingCursor) sendCursor(0, 0, false); });
+  document.addEventListener('visibilitychange', () => { if (sharingCursor && document.hidden) sendCursor(0, 0, false); });
+
+  document.getElementById('cursorBtn').onclick = () => {
+    sharingCursor = !sharingCursor;
+    document.getElementById('cursorBtn').classList.toggle('active', sharingCursor);
+    if (!sharingCursor) sendCursor(0, 0, false); // выключили показ — спрятать у других
+  };
+  document.getElementById('findBtn').onclick = () => {
+    const list = Object.keys(remoteCursors).map((k) => remoteCursors[k]).filter((c) => c.x != null);
+    const target = list.find((c) => c.visible) || list[0];
+    if (!target) { alert('Курсор другого участника не виден. Попросите его включить показ курсора (кнопка 👁 Курсор).'); return; }
+    const zoom = canvas.getZoom();
+    const vpt = canvas.viewportTransform.slice();
+    vpt[4] = canvas.getWidth() / 2 - zoom * target.x;
+    vpt[5] = canvas.getHeight() / 2 - zoom * target.y;
+    canvas.setViewportTransform(vpt);
+    canvas.requestRenderAll();
+    renderCursors();
+  };
 
   applySheet('white');
   setTool('select');
