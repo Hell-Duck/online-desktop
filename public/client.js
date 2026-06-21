@@ -401,15 +401,28 @@ function start(room) {
       const p = point || viewportCenterScene();
       clone.setPositionByOrigin(new fabric.Point(p.x, p.y), 'center', 'center'); // центр вставки = курсор/центр экрана
       if (clone.type === 'activeSelection') {
-        // группа объектов: добавляем каждый отдельно с новым id (каждый разошлётся как object:added)
+        // Группа: у детей координаты относительны центру группы. Чтобы не разослать/не запомнить
+        // относительные координаты, сначала добавляем молча, фиксируем абсолютные координаты
+        // снятием выделения, и только потом транслируем и пишем историю.
         clone.canvas = canvas;
-        clone.forEachObject((o) => { o.id = uid(); canvas.add(o); });
-        clone.setCoords();
+        const kids = clone.getObjects();
+        applyingRemote = true;
+        kids.forEach((o) => { o.id = uid(); canvas.add(o); });
+        canvas.setActiveObject(clone);
+        canvas.discardActiveObject(); // <- здесь дети получают абсолютные left/top
+        applyingRemote = false;
+        kids.forEach((o) => {
+          o.setCoords();
+          socket.emit('object:added', serialize(o)); // теперь координаты верные
+          cacheObj(o);
+          pushHist({ kind: 'add', id: o.id });
+        });
+        canvas.setActiveObject(new fabric.ActiveSelection(kids, { canvas })); // вернём групповое выделение
       } else {
         clone.id = uid();
-        canvas.add(clone);
+        canvas.add(clone); // одиночный: object:added сам разошлёт и запишет историю
+        canvas.setActiveObject(clone);
       }
-      canvas.setActiveObject(clone);
       canvas.requestRenderAll();
     }, ['id', 'eraser']);
   }
