@@ -750,25 +750,45 @@ function start(room) {
 
   function cursorEl(from) {
     let c = remoteCursors[from];
-    if (!c) c = remoteCursors[from] = { x: null, y: null, visible: false, el: null };
+    if (!c) c = remoteCursors[from] = { x: null, y: null, visible: false, el: null, ptr: null, edge: null };
     if (!c.el) {
       const el = document.createElement('div');
       el.className = 'remote-cursor';
-      el.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24"><path d="M4 2 L4 19 L9 14 L12 21 L15 20 L12 13 L19 13 Z" fill="#e11d48" stroke="#fff" stroke-width="1.5"/></svg>';
+      const ptr = document.createElement('span'); // указатель (когда курсор на экране)
+      ptr.className = 'cur-ptr';
+      ptr.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24"><path d="M4 2 L4 19 L9 14 L12 21 L15 20 L12 13 L19 13 Z" fill="#e11d48" stroke="#fff" stroke-width="1.5"/></svg>';
+      const edge = document.createElement('span'); // маркер у края (когда курсор за экраном), стрелка вправо по умолчанию
+      edge.className = 'cur-edge';
+      edge.innerHTML = '<svg width="28" height="28" viewBox="0 0 28 28"><circle cx="14" cy="14" r="11" fill="#e11d48" stroke="#fff" stroke-width="2"/><path d="M11 9 L19 14 L11 19 Z" fill="#fff"/></svg>';
+      el.appendChild(ptr); el.appendChild(edge);
       cursorLayer.appendChild(el);
-      c.el = el;
+      c.el = el; c.ptr = ptr; c.edge = edge;
     }
     return c;
   }
   function placeCursor(c) {
     if (!c.el) return;
-    if (c.visible && c.x != null) {
-      const vpt = canvas.viewportTransform; // сцена -> экран (без вращения)
-      c.el.style.left = (vpt[0] * c.x + vpt[4]) + 'px';
-      c.el.style.top = (vpt[3] * c.y + vpt[5]) + 'px';
-      c.el.style.display = 'block';
+    if (!(c.visible && c.x != null)) { c.el.style.display = 'none'; return; }
+    const vpt = canvas.viewportTransform; // сцена -> экран (без вращения)
+    const W = cursorLayer.clientWidth, H = cursorLayer.clientHeight;
+    const sx = vpt[0] * c.x + vpt[4], sy = vpt[3] * c.y + vpt[5];
+    c.el.style.display = 'block';
+    if (sx >= 0 && sx <= W && sy >= 0 && sy <= H) {
+      // курсор в видимой области — обычный указатель
+      c.el.style.left = sx + 'px';
+      c.el.style.top = sy + 'px';
+      c.el.style.transform = 'translate(-3px, -2px)';
+      c.ptr.style.display = 'block'; c.edge.style.display = 'none';
     } else {
-      c.el.style.display = 'none';
+      // курсор за экраном — маркер у края, повёрнутый в сторону курсора
+      const cx = W / 2, cy = H / 2, margin = 20;
+      const dx = sx - cx, dy = sy - cy;
+      const scale = Math.min((W / 2 - margin) / Math.max(Math.abs(dx), 1e-6), (H / 2 - margin) / Math.max(Math.abs(dy), 1e-6));
+      c.el.style.left = (cx + dx * scale) + 'px';
+      c.el.style.top = (cy + dy * scale) + 'px';
+      c.el.style.transform = 'translate(-50%, -50%)';
+      c.edge.style.transform = 'rotate(' + (Math.atan2(dy, dx) * 180 / Math.PI) + 'deg)';
+      c.ptr.style.display = 'none'; c.edge.style.display = 'block';
     }
   }
   function renderCursors() { Object.keys(remoteCursors).forEach((k) => placeCursor(remoteCursors[k])); }
