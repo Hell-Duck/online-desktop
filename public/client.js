@@ -60,6 +60,7 @@ function start(room) {
   let currentColor = document.getElementById('color').value;
   let currentSheet = 'white'; // вид листа: white | ruled | grid
   let internalClipboard = null; // скопированные объекты доски (Ctrl+C/Ctrl+V)
+  const CLIP_MARKER = 'ONLINE_DESKTOP_OBJECTS'; // метка в системном буфере: «последним копировали доску»
 
   /* --- Трансляция локальных изменений --- */
   const serialize = (obj) => obj.toObject();
@@ -387,24 +388,29 @@ function start(room) {
     }, ['id', 'eraser']);
   }
 
-  // Ctrl+V: картинка из системного буфера в приоритете, иначе — скопированные объекты доски
+  // Ctrl+V. Приоритет — последнему копированию: если в буфере наша метка, значит копировали объекты доски.
   window.addEventListener('paste', (e) => {
     // не перехватываем вставку, если редактируется текст на доске
     const active = canvas.getActiveObject();
     if (active && active.isEditing) return;
 
-    const items = (e.clipboardData || window.clipboardData)?.items || [];
+    const cd = e.clipboardData || window.clipboardData;
+    const text = cd ? cd.getData('text/plain') : '';
+
+    // последним копировали объекты доски -> вставляем их
+    if (text && text.indexOf(CLIP_MARKER) === 0 && internalClipboard) {
+      e.preventDefault();
+      pasteInternal();
+      return;
+    }
+    // иначе — картинка из системного буфера (скриншот и т.п.)
+    const items = cd?.items || [];
     for (const item of items) {
       if (item.type && item.type.startsWith('image/')) {
         e.preventDefault();
         readFileAsImage(item.getAsFile());
         return;
       }
-    }
-    // картинки в буфере нет -> вставляем ранее скопированные объекты доски
-    if (internalClipboard) {
-      e.preventDefault();
-      pasteInternal();
     }
   });
 
@@ -427,12 +433,16 @@ function start(room) {
       e.preventDefault();
       undo();
     }
-    // Ctrl+C — копировать выделенное во внутренний буфер
-    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyC') {
-      const ao = canvas.getActiveObject();
-      if (ao && ao.isEditing) return; // копируется текст внутри блока — не мешаем
-      if (ao) ao.clone((cloned) => { internalClipboard = cloned; }, ['id', 'eraser']);
-    }
+  });
+
+  // Копирование объектов доски: помечаем системный буфер, чтобы вставка знала — последним копировали доску.
+  // Событие 'copy' срабатывает на Ctrl+C при любой раскладке и при копировании через меню.
+  window.addEventListener('copy', (e) => {
+    const ao = canvas.getActiveObject();
+    if (!ao || ao.isEditing || !e.clipboardData) return; // нет выделения / печатаем текст — обычное копирование
+    ao.clone((cloned) => { internalClipboard = cloned; }, ['id', 'eraser']);
+    e.clipboardData.setData('text/plain', CLIP_MARKER); // метка перетирает прошлое содержимое буфера
+    e.preventDefault();
   });
   document.getElementById('clearBtn').onclick = () => {
     if (!confirm('Очистить доску у всех участников?')) return;
