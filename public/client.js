@@ -59,6 +59,7 @@ function start(room) {
   let currentTool = 'select';
   let currentColor = document.getElementById('color').value;
   let currentSheet = 'white'; // вид листа: white | ruled | grid
+  const widths = { pen: 3, eraser: 20, shape: 2 }; // толщина по категориям инструментов
   let internalClipboard = null; // скопированные объекты доски (Ctrl+C/Ctrl+V)
   const CLIP_MARKER = 'ONLINE_DESKTOP_OBJECTS'; // метка в системном буфере: «последним копировали доску»
 
@@ -205,10 +206,24 @@ function start(room) {
 
   const toolButtons = toolbar.querySelectorAll('button[data-tool]');
   const isEraserTool = (t) => t === 'eraser' || t === 'eraser-soft';
+  // К какой категории толщины относится инструмент (null — толщина неприменима)
+  const widthCategory = (t) => t === 'pen' ? 'pen' : isEraserTool(t) ? 'eraser' : (t === 'rect' || t === 'circle' || t === 'line') ? 'shape' : null;
+
   // В «мягком» режиме (eraser-soft) помечаем картинки erasable:false — ластик их пропускает
   function refreshErasable() {
     const protectImages = currentTool === 'eraser-soft';
     canvas.forEachObject((o) => { o.erasable = !(protectImages && o.type === 'image'); });
+  }
+  // Подстроить ползунок толщины под активный инструмент
+  function updateThicknessUI() {
+    const cat = widthCategory(currentTool);
+    const wrap = document.getElementById('thicknessWrap');
+    const slider = document.getElementById('thickness');
+    wrap.classList.toggle('disabled', !cat); // для select/pan/text/картинки толщина неактивна
+    if (cat) {
+      slider.value = widths[cat];
+      document.getElementById('thicknessVal').textContent = widths[cat];
+    }
   }
   function setTool(tool) {
     if (isEraserTool(tool) && !eraserBrush) return; // нет ластика в сборке — игнорируем
@@ -221,13 +236,26 @@ function start(room) {
     if (tool === 'pen') {
       canvas.freeDrawingBrush = penBrush;
       penBrush.color = currentColor;
-      penBrush.width = 3;
+      penBrush.width = widths.pen;
     } else if (isEraserTool(tool)) {
       canvas.freeDrawingBrush = eraserBrush;
-      eraserBrush.width = 20;
+      eraserBrush.width = widths.eraser;
       refreshErasable(); // обновляем защиту картинок под выбранный режим ластика
     }
+    updateThicknessUI();
   }
+
+  // Ползунок толщины — меняет значение для категории активного инструмента
+  document.getElementById('thickness').addEventListener('input', (e) => {
+    const cat = widthCategory(currentTool);
+    if (!cat) return;
+    const v = parseInt(e.target.value, 10);
+    widths[cat] = v;
+    document.getElementById('thicknessVal').textContent = v;
+    if (cat === 'pen') penBrush.width = v;
+    else if (cat === 'eraser') eraserBrush.width = v;
+    // для фигур толщина применяется при создании (widths.shape)
+  });
   toolButtons.forEach((b) => (b.onclick = () => setTool(b.dataset.tool)));
 
   document.getElementById('color').addEventListener('input', (e) => {
@@ -301,10 +329,10 @@ function start(room) {
       setTool('select');
       return;
     }
-    const common = { left: p.x, top: p.y, stroke: currentColor, strokeWidth: 2, fill: 'transparent', id: uid() };
+    const common = { left: p.x, top: p.y, stroke: currentColor, strokeWidth: widths.shape, fill: 'transparent', id: uid() };
     if (currentTool === 'rect') draft = new fabric.Rect({ ...common, width: 0, height: 0 });
     else if (currentTool === 'circle') draft = new fabric.Ellipse({ ...common, rx: 0, ry: 0 });
-    else if (currentTool === 'line') draft = new fabric.Line([p.x, p.y, p.x, p.y], { stroke: currentColor, strokeWidth: 2, id: uid() });
+    else if (currentTool === 'line') draft = new fabric.Line([p.x, p.y, p.x, p.y], { stroke: currentColor, strokeWidth: widths.shape, id: uid() });
     if (draft) { applyingRemote = true; canvas.add(draft); applyingRemote = false; } // не транслируем пустую заготовку
   });
 
