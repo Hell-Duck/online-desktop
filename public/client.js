@@ -59,6 +59,7 @@ function start(room) {
   let currentTool = 'select';
   let currentColor = document.getElementById('color').value;
   let currentSheet = 'white'; // вид листа: white | ruled | grid
+  let internalClipboard = null; // скопированные объекты доски (Ctrl+C/Ctrl+V)
 
   /* --- Трансляция локальных изменений --- */
   const serialize = (obj) => obj.toObject();
@@ -366,7 +367,27 @@ function start(room) {
     imageInput.value = '';
   };
 
-  // Вставка картинки из буфера обмена (Ctrl+V)
+  // Вставить скопированные объекты доски со смещением
+  function pasteInternal() {
+    if (!internalClipboard) return;
+    internalClipboard.clone((clone) => {
+      canvas.discardActiveObject();
+      clone.set({ left: (clone.left || 0) + 20, top: (clone.top || 0) + 20 });
+      if (clone.type === 'activeSelection') {
+        // группа объектов: добавляем каждый отдельно с новым id (каждый разошлётся как object:added)
+        clone.canvas = canvas;
+        clone.forEachObject((o) => { o.id = uid(); canvas.add(o); });
+        clone.setCoords();
+      } else {
+        clone.id = uid();
+        canvas.add(clone);
+      }
+      canvas.setActiveObject(clone);
+      canvas.requestRenderAll();
+    }, ['id', 'eraser']);
+  }
+
+  // Ctrl+V: картинка из системного буфера в приоритете, иначе — скопированные объекты доски
   window.addEventListener('paste', (e) => {
     // не перехватываем вставку, если редактируется текст на доске
     const active = canvas.getActiveObject();
@@ -379,6 +400,11 @@ function start(room) {
         readFileAsImage(item.getAsFile());
         return;
       }
+    }
+    // картинки в буфере нет -> вставляем ранее скопированные объекты доски
+    if (internalClipboard) {
+      e.preventDefault();
+      pasteInternal();
     }
   });
 
@@ -400,6 +426,12 @@ function start(room) {
       if (ao && ao.isEditing) return; // пусть браузер отменяет ввод в тексте
       e.preventDefault();
       undo();
+    }
+    // Ctrl+C — копировать выделенное во внутренний буфер
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+      const ao = canvas.getActiveObject();
+      if (ao && ao.isEditing) return; // копируется текст внутри блока — не мешаем
+      if (ao) ao.clone((cloned) => { internalClipboard = cloned; }, ['id', 'eraser']);
     }
   });
   document.getElementById('clearBtn').onclick = () => {
