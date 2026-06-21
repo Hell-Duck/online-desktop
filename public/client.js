@@ -33,9 +33,12 @@ const preRoom = new URL(location.href).searchParams.get('room');
 if (preRoom) roomInput.value = preRoom;
 
 /* ---------- Запуск доски ---------- */
+const SIDEBAR_W = 52; // ширина левой панели инструментов
+
 function start(room) {
   lobby.style.display = 'none';
   toolbar.style.display = 'flex';
+  document.getElementById('sidebar').style.display = 'flex';
   document.getElementById('roomLabel').textContent = room;
 
   const socket = io();
@@ -46,12 +49,13 @@ function start(room) {
   window.boardCanvas = canvas; // ссылка для отладки/тестов
 
   function resize() {
-    canvas.setWidth(window.innerWidth);
+    canvas.setWidth(window.innerWidth - SIDEBAR_W);
     canvas.setHeight(window.innerHeight - 52);
     canvas.calcOffset();
   }
-  // canvas-обёртка ниже тулбара
+  // canvas-обёртка: ниже тулбара и правее боковой панели
   canvasEl.parentElement.style.marginTop = '52px';
+  canvasEl.parentElement.style.marginLeft = SIDEBAR_W + 'px';
   resize();
   window.addEventListener('resize', resize);
 
@@ -223,7 +227,7 @@ function start(room) {
   const eraserBrush = fabric.EraserBrush ? new fabric.EraserBrush(canvas) : null;
   if (!eraserBrush) console.warn('EraserBrush недоступен в этой сборке Fabric.js');
 
-  const toolButtons = toolbar.querySelectorAll('button[data-tool]');
+  const toolButtons = document.querySelectorAll('button[data-tool]'); // инструменты теперь в боковой панели
   const isEraserTool = (t) => t === 'eraser' || t === 'eraser-soft';
   // К какой категории толщины относится инструмент (null — толщина неприменима)
   const widthCategory = (t) => t === 'pen' ? 'pen' : isEraserTool(t) ? 'eraser' : (t === 'rect' || t === 'circle' || t === 'line') ? 'shape' : null;

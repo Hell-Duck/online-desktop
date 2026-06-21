@@ -64,8 +64,20 @@
     #exitBtn:hover { background: #ef4444; color: #fff; }
     canvas { display: block; }
 
+    /* Левая панель инструментов */
+    #sidebar {
+      display: none; position: fixed; top: 52px; left: 0; bottom: 0; width: 52px;
+      background: #fff; border-right: 1px solid #e5e7eb; flex-direction: column; align-items: center;
+      gap: 6px; padding: 8px 0; z-index: 10;
+    }
+    #sidebar button {
+      width: 40px; height: 40px; border: 1px solid #d0d4db; background: #fff; border-radius: 8px;
+      cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center;
+    }
+    #sidebar button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+
     /* Курсоры других участников */
-    #cursorLayer { display: none; position: fixed; top: 52px; left: 0; right: 0; bottom: 0; pointer-events: none; overflow: hidden; z-index: 30; }
+    #cursorLayer { display: none; position: fixed; top: 52px; left: 52px; right: 0; bottom: 0; pointer-events: none; overflow: hidden; z-index: 30; }
     .remote-cursor { position: absolute; transition: left .05s linear, top .05s linear; }
     .remote-cursor .cur-edge { display: none; }
   </style>
@@ -81,17 +93,20 @@
     </div>
   </div>
 
-  <div id="toolbar">
+  <!-- Левая панель инструментов рисования -->
+  <div id="sidebar">
     <button data-tool="select" class="active" title="Выделение объектов">⬚</button>
     <button data-tool="pan" title="Двигать полотно (или зажми пробел)">✋</button>
     <button data-tool="pen" title="Карандаш">✏️</button>
-    <button data-tool="text" title="Текст">T</button>
     <button data-tool="rect" title="Прямоугольник">▭</button>
     <button data-tool="circle" title="Круг">◯</button>
     <button data-tool="line" title="Линия">╱</button>
+    <button data-tool="text" title="Текст">T</button>
     <button data-tool="eraser" title="Стёрка — стирает всё">🧽</button>
     <button data-tool="eraser-soft" title="Стёрка — не трогает вставленные картинки">🧽🛡</button>
-    <div class="sep"></div>
+  </div>
+
+  <div id="toolbar">
     <select id="sheet" title="Вид листа">
       <option value="white">Белый</option>
       <option value="ruled">Линейка</option>
