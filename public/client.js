@@ -431,6 +431,21 @@ function start(room) {
   /* --- Рисование фигур мышью --- */
   let draft = null, startX = 0, startY = 0;
 
+  // Создать текстовый блок в точке сцены и сразу войти в редактирование
+  function createTextAt(x, y) {
+    const t = new fabric.IText('Текст', { left: x, top: y, fill: currentColor, fontSize: 22, id: uid() });
+    canvas.add(t);
+    canvas.setActiveObject(t);
+    t.enterEditing(); t.selectAll();
+  }
+
+  // Двойной клик ЛКМ по пустому месту (в режиме выделения) -> новый блок текста
+  canvas.on('mouse:dblclick', (opt) => {
+    if (opt.target || currentTool !== 'select') return; // по объекту или в другом инструменте — не создаём
+    const p = canvas.getPointer(opt.e);
+    createTextAt(p.x, p.y);
+  });
+
   canvas.on('mouse:down', (opt) => {
     // перемещение полотна (инструмент «рука» или зажатый пробел)
     if (isPanMode()) {
@@ -447,10 +462,7 @@ function start(room) {
     startX = p.x; startY = p.y;
 
     if (currentTool === 'text') {
-      const t = new fabric.IText('Текст', { left: p.x, top: p.y, fill: currentColor, fontSize: 22, id: uid() });
-      canvas.add(t);
-      canvas.setActiveObject(t);
-      t.enterEditing(); t.selectAll();
+      createTextAt(p.x, p.y);
       setTool('select');
       return;
     }
