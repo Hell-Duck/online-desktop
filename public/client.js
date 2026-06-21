@@ -661,6 +661,39 @@ function start(room) {
     window.location = location.pathname; // перезагрузка на лобби — полностью сбрасывает состояние
   };
 
+  // Сохранить всю исписанную область доски в PNG (2× разрешение, с фоном листа)
+  document.getElementById('saveBtn').onclick = () => {
+    const objs = canvas.getObjects();
+    if (!objs.length) { alert('Доска пустая — нечего сохранять.'); return; }
+
+    const savedVpt = canvas.viewportTransform;
+    canvas.setViewportTransform([1, 0, 0, 1, 0, 0]); // считаем в координатах сцены, зум 1
+
+    // границы всего нарисованного
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    objs.forEach((o) => {
+      const r = o.getBoundingRect(true); // абсолютные координаты
+      minX = Math.min(minX, r.left); minY = Math.min(minY, r.top);
+      maxX = Math.max(maxX, r.left + r.width); maxY = Math.max(maxY, r.top + r.height);
+    });
+    const pad = 24; // поля вокруг содержимого
+    minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+
+    const dataURL = canvas.toDataURL({
+      format: 'png', multiplier: 2,
+      left: minX, top: minY, width: maxX - minX, height: maxY - minY,
+    });
+
+    canvas.setViewportTransform(savedVpt); // вернуть прежний вид
+    canvas.requestRenderAll();
+
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const a = document.createElement('a');
+    a.href = dataURL;
+    a.download = `board-${stamp}.png`;
+    a.click();
+  };
+
   /* --- Вид листа (белый / линейка / клетка) --- */
   // Фон рисуется паттерном; backgroundVpt=true по умолчанию => линии двигаются и масштабируются вместе с полотном
   function makeSheetTile(type) {
