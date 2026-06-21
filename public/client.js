@@ -61,6 +61,11 @@ function start(room) {
   let currentSheet = 'white'; // вид листа: white | ruled | grid
   const widths = { pen: 3, eraser: 20, shape: 2 }; // толщина по категориям инструментов
   let internalClipboard = null; // скопированные объекты доски (Ctrl+C/Ctrl+V)
+  // печатаем в поле ввода тулбара (чтобы Delete/Ctrl+Z/пробел там не трогали доску)
+  const isTypingInField = () => {
+    const el = document.activeElement;
+    return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
+  };
   const CLIP_MARKER = 'ONLINE_DESKTOP_OBJECTS'; // метка в системном буфере: «последним копировали доску»
 
   /* --- Трансляция локальных изменений --- */
@@ -157,6 +162,34 @@ function start(room) {
     canvas.requestRenderAll();
   }
 
+  // Изменить выделенные объекты (applyFn для каждого), разослать и записать в историю.
+  // Для группы фиксируем абсолютные координаты, чтобы не разослать относительные (как при вставке).
+  function modifySelected(applyFn) {
+    const active = canvas.getActiveObject();
+    if (!active) return false;
+    let targets, wasSelection = false;
+    if (active.type === 'activeSelection') {
+      targets = active.getObjects().slice();
+      canvas.discardActiveObject(); // фиксируем абсолютные координаты детей
+      wasSelection = true;
+    } else {
+      targets = [active];
+    }
+    let changed = false;
+    targets.forEach((o) => {
+      const before = stateCache[o.id];
+      if (applyFn(o) === false) return; // объект не подходит — пропустить
+      changed = true;
+      o.setCoords();
+      socket.emit('object:modified', serialize(o));
+      cacheObj(o);
+      pushHist({ kind: 'modify', id: o.id, before });
+    });
+    if (wasSelection) canvas.setActiveObject(new fabric.ActiveSelection(targets, { canvas }));
+    canvas.requestRenderAll();
+    return changed;
+  }
+
   /* --- Применение удалённых изменений --- */
   function upsert(json) {
     applyingRemote = true;
@@ -214,16 +247,26 @@ function start(room) {
     const protectImages = currentTool === 'eraser-soft';
     canvas.forEachObject((o) => { o.erasable = !(protectImages && o.type === 'image'); });
   }
-  // Подстроить ползунок толщины под активный инструмент
+  // У объекта есть толщина обводки? (текст/картинка — нет)
+  const hasStroke = (o) => o && o.type !== 'i-text' && o.type !== 'text' && o.type !== 'image';
+  // Подстроить ползунок толщины: под выделенный объект (в режиме выделения) либо под активный инструмент
   function updateThicknessUI() {
-    const cat = widthCategory(currentTool);
     const wrap = document.getElementById('thicknessWrap');
     const slider = document.getElementById('thickness');
-    wrap.classList.toggle('disabled', !cat); // для select/pan/text/картинки толщина неактивна
-    if (cat) {
-      slider.value = widths[cat];
-      document.getElementById('thicknessVal').textContent = widths[cat];
+    const valEl = document.getElementById('thicknessVal');
+    const active = canvas.getActiveObject();
+    if (currentTool === 'select' && active) {
+      const o = active.type === 'activeSelection' ? active.getObjects().find(hasStroke) : (hasStroke(active) ? active : null);
+      if (o) {
+        wrap.classList.remove('disabled');
+        slider.value = o.strokeWidth || 1;
+        valEl.textContent = o.strokeWidth || 1;
+        return;
+      }
     }
+    const cat = widthCategory(currentTool);
+    wrap.classList.toggle('disabled', !cat); // для select без объекта/pan/text/картинки — неактивно
+    if (cat) { slider.value = widths[cat]; valEl.textContent = widths[cat]; }
   }
   function setTool(tool) {
     if (isEraserTool(tool) && !eraserBrush) return; // нет ластика в сборке — игнорируем
@@ -245,16 +288,63 @@ function start(room) {
     updateThicknessUI();
   }
 
-  // Ползунок толщины — меняет значение для категории активного инструмента
+  // Ползунок толщины: если выделен объект — меняем его обводку; иначе — толщину для будущих штрихов/фигур
   document.getElementById('thickness').addEventListener('input', (e) => {
+    const v = parseInt(e.target.value, 10);
+    document.getElementById('thicknessVal').textContent = v;
+    const active = canvas.getActiveObject();
+    if (currentTool === 'select' && active) {
+      modifySelected((o) => { if (!hasStroke(o)) return false; o.set('strokeWidth', v); });
+      return;
+    }
     const cat = widthCategory(currentTool);
     if (!cat) return;
-    const v = parseInt(e.target.value, 10);
     widths[cat] = v;
-    document.getElementById('thicknessVal').textContent = v;
     if (cat === 'pen') penBrush.width = v;
     else if (cat === 'eraser') eraserBrush.width = v;
     // для фигур толщина применяется при создании (widths.shape)
+  });
+
+  /* --- Контекстное меню текста (размер, Ж/К/Ч) — видно только при работе с текстом --- */
+  const isText = (o) => !!o && (o.type === 'i-text' || o.type === 'text');
+  function updateTextMenu() {
+    const o = canvas.getActiveObject();
+    const show = isText(o);
+    document.getElementById('textToolbar').style.display = show ? 'flex' : 'none';
+    if (!show) return;
+    document.getElementById('fontSize').value = Math.round(o.fontSize || 22);
+    document.getElementById('boldBtn').classList.toggle('active', o.fontWeight === 'bold');
+    document.getElementById('italicBtn').classList.toggle('active', o.fontStyle === 'italic');
+    document.getElementById('underlineBtn').classList.toggle('active', !!o.underline);
+  }
+  // Применить стиль к активному тексту: разослать и записать в историю
+  function applyTextStyle(applyFn) {
+    const o = canvas.getActiveObject();
+    if (!isText(o)) return;
+    const before = stateCache[o.id];
+    applyFn(o);
+    o.setCoords();
+    canvas.requestRenderAll();
+    socket.emit('object:modified', serialize(o));
+    cacheObj(o);
+    pushHist({ kind: 'modify', id: o.id, before });
+    updateTextMenu();
+  }
+  document.getElementById('fontSize').addEventListener('input', (e) => {
+    const v = parseInt(e.target.value, 10);
+    if (v) applyTextStyle((o) => o.set('fontSize', v));
+  });
+  // mousedown.preventDefault — чтобы клик по кнопке не сбрасывал выделение текста
+  ['boldBtn', 'italicBtn', 'underlineBtn'].forEach((id) => {
+    document.getElementById(id).addEventListener('mousedown', (e) => e.preventDefault());
+  });
+  document.getElementById('boldBtn').onclick = () => applyTextStyle((o) => o.set('fontWeight', o.fontWeight === 'bold' ? 'normal' : 'bold'));
+  document.getElementById('italicBtn').onclick = () => applyTextStyle((o) => o.set('fontStyle', o.fontStyle === 'italic' ? 'normal' : 'italic'));
+  document.getElementById('underlineBtn').onclick = () => applyTextStyle((o) => o.set('underline', !o.underline));
+
+  // Реакция на изменение выделения — обновляем меню текста и ползунок толщины
+  ['selection:created', 'selection:updated', 'selection:cleared'].forEach((ev) => {
+    canvas.on(ev, () => { updateThicknessUI(); updateTextMenu(); });
   });
   toolButtons.forEach((b) => (b.onclick = () => setTool(b.dataset.tool)));
 
@@ -285,7 +375,7 @@ function start(room) {
 
   // Пробел временно включает «руку» (как в графических редакторах)
   window.addEventListener('keydown', (e) => {
-    if (e.code === 'Space' && !(document.activeElement && document.activeElement.isContentEditable)) {
+    if (e.code === 'Space' && !isTypingInField()) {
       const ao = canvas.getActiveObject();
       if (ao && ao.isEditing) return; // печатаем пробел в тексте
       spaceDown = true;
@@ -489,7 +579,8 @@ function start(room) {
   }
   document.getElementById('deleteBtn').onclick = deleteActive;
   window.addEventListener('keydown', (e) => {
-    if ((e.key === 'Delete' || e.key === 'Backspace') && !(document.activeElement && document.activeElement.isContentEditable)) {
+    if (isTypingInField()) return; // печатаем в поле тулбара — не трогаем доску
+    if (e.key === 'Delete' || e.key === 'Backspace') {
       const ao = canvas.getActiveObject();
       if (ao && !ao.isEditing) { e.preventDefault(); deleteActive(); }
     }
