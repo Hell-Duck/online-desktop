@@ -63,31 +63,96 @@ function start(room) {
   /* --- Трансляция локальных изменений --- */
   const serialize = (obj) => obj.toObject();
 
+  /* --- История для отмены (Ctrl+Z) --- */
+  const history = [];          // стек обратимых операций
+  const stateCache = {};       // id -> последнее известное состояние объекта (для diff при изменении)
+  const MAX_HISTORY = 60;
+  const byId = (id) => canvas.getObjects().find((o) => o.id === id);
+  const cacheObj = (obj) => { if (obj && obj.id) stateCache[obj.id] = serialize(obj); };
+  function pushHist(entry) {
+    history.push(entry);
+    if (history.length > MAX_HISTORY) history.shift();
+  }
+
   canvas.on('object:added', (e) => {
     const obj = e.target;
     if (!obj.id) obj.id = uid();
     if (applyingRemote) return;
     socket.emit('object:added', serialize(obj));
+    cacheObj(obj);
+    pushHist({ kind: 'add', id: obj.id });
   });
   canvas.on('object:modified', (e) => {
     if (applyingRemote) return;
-    socket.emit('object:modified', serialize(e.target));
+    const obj = e.target;
+    pushHist({ kind: 'modify', id: obj.id, before: stateCache[obj.id] }); // before — состояние до изменения
+    socket.emit('object:modified', serialize(obj));
+    cacheObj(obj);
   });
   canvas.on('text:changed', (e) => {
     if (applyingRemote) return;
     socket.emit('object:modified', serialize(e.target));
+    cacheObj(e.target); // в историю не пишем (иначе откат по каждой букве)
   });
   canvas.on('object:removed', (e) => {
     if (applyingRemote) return;
-    if (e.target && e.target.id) socket.emit('object:removed', { id: e.target.id });
+    if (e.target && e.target.id) {
+      pushHist({ kind: 'remove', json: serialize(e.target) }); // чтобы откат вернул объект
+      socket.emit('object:removed', { id: e.target.id });
+      delete stateCache[e.target.id];
+    }
   });
   // Ластик стёр части объектов -> разослать обновлённые объекты (с маской eraser) остальным
   canvas.on('erasing:end', (e) => {
     if (applyingRemote || !e || !e.targets) return;
+    const ops = [];
     e.targets.forEach((obj) => {
-      if (obj.id) socket.emit('object:modified', serialize(obj));
+      if (!obj.id) return;
+      ops.push({ id: obj.id, before: stateCache[obj.id] });
+      socket.emit('object:modified', serialize(obj));
+      cacheObj(obj);
     });
+    if (ops.length) pushHist({ kind: 'batch', ops }); // один Ctrl+Z отменит весь штрих ластика
   });
+
+  /* --- Применение отмены --- */
+  // Восстановить объект в заданном (предыдущем) состоянии и разослать остальным
+  function restoreObject(json) {
+    applyingRemote = true;
+    const ex = byId(json.id);
+    if (ex) canvas.remove(ex);
+    fabric.util.enlivenObjects([json], ([o]) => {
+      o.id = json.id;
+      o.selectable = currentTool === 'select';
+      canvas.add(o);
+      cacheObj(o);
+      canvas.requestRenderAll();
+      applyingRemote = false;
+    });
+    socket.emit('object:modified', json); // у второго участника применится через upsert
+  }
+  function removeById(id) {
+    const o = byId(id);
+    if (o) { applyingRemote = true; canvas.remove(o); applyingRemote = false; }
+    delete stateCache[id];
+    socket.emit('object:removed', { id });
+  }
+  function undo() {
+    const entry = history.pop();
+    if (!entry) return;
+    if (entry.kind === 'add') {
+      removeById(entry.id);                       // откат добавления = удалить
+    } else if (entry.kind === 'remove') {
+      if (entry.json) restoreObject(entry.json);  // откат удаления = вернуть
+    } else if (entry.kind === 'modify') {
+      if (entry.before) restoreObject(entry.before); // откат изменения = вернуть прошлое состояние
+      else removeById(entry.id);                  // before нет => объект был новым
+    } else if (entry.kind === 'batch') {
+      entry.ops.forEach((op) => { if (op.before) restoreObject(op.before); });
+    }
+    canvas.discardActiveObject();
+    canvas.requestRenderAll();
+  }
 
   /* --- Применение удалённых изменений --- */
   function upsert(json) {
@@ -97,6 +162,7 @@ function start(room) {
     fabric.util.enlivenObjects([json], ([obj]) => {
       obj.id = json.id;
       canvas.add(obj);
+      cacheObj(obj); // запоминаем состояние чужого объекта для возможной отмены его перемещения
       canvas.requestRenderAll();
       applyingRemote = false;
     });
@@ -264,6 +330,8 @@ function start(room) {
     if (!draft) return;
     draft.setCoords();
     socket.emit('object:added', serialize(draft)); // теперь транслируем готовую фигуру
+    cacheObj(draft);
+    pushHist({ kind: 'add', id: draft.id }); // фигуру тоже можно отменить
     draft = null;
     setTool('select');
   });
@@ -325,6 +393,13 @@ function start(room) {
     if ((e.key === 'Delete' || e.key === 'Backspace') && !(document.activeElement && document.activeElement.isContentEditable)) {
       const ao = canvas.getActiveObject();
       if (ao && !ao.isEditing) { e.preventDefault(); deleteActive(); }
+    }
+    // Ctrl+Z / Cmd+Z — отмена (не перехватываем при редактировании текста)
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+      const ao = canvas.getActiveObject();
+      if (ao && ao.isEditing) return; // пусть браузер отменяет ввод в тексте
+      e.preventDefault();
+      undo();
     }
   });
   document.getElementById('clearBtn').onclick = () => {
