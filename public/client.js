@@ -61,6 +61,7 @@ function start(room) {
   let currentSheet = 'white'; // вид листа: white | ruled | grid
   const widths = { pen: 3, eraser: 20, shape: 2 }; // толщина по категориям инструментов
   let internalClipboard = null; // скопированные объекты доски (Ctrl+C/Ctrl+V)
+  let leaving = false; // осознанный выход — не показывать предупреждение о закрытии
   // печатаем в поле ввода тулбара (чтобы Delete/Ctrl+Z/пробел там не трогали доску)
   const isTypingInField = () => {
     const el = document.activeElement;
@@ -654,9 +655,18 @@ function start(room) {
     socket.emit('canvas:cleared');
   };
 
+  // Защита от случайного закрытия/перезагрузки: встроенный диалог браузера, если на доске что-то есть
+  window.addEventListener('beforeunload', (e) => {
+    if (!leaving && canvas.getObjects().length > 0) {
+      e.preventDefault();
+      e.returnValue = ''; // современные браузеры показывают свой стандартный текст
+    }
+  });
+
   // Выход из комнаты: отключаемся и возвращаемся на экран входа (без ?room в адресе)
   document.getElementById('exitBtn').onclick = () => {
-    if (!confirm('Выйти из комнаты?')) return;
+    if (!confirm('Выйти из комнаты? Несохранённая доска будет потеряна.')) return;
+    leaving = true;               // осознанный выход — без двойного предупреждения beforeunload
     socket.disconnect();          // второй участник увидит уменьшение числа участников
     window.location = location.pathname; // перезагрузка на лобби — полностью сбрасывает состояние
   };
