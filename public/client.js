@@ -43,6 +43,7 @@ function start(room) {
 
   const canvasEl = document.getElementById('board');
   const canvas = new fabric.Canvas('board', { backgroundColor: '#ffffff' });
+  window.boardCanvas = canvas; // ссылка для отладки/тестов
 
   function resize() {
     canvas.setWidth(window.innerWidth);
@@ -134,7 +135,7 @@ function start(room) {
     toolButtons.forEach((b) => b.classList.toggle('active', b.dataset.tool === tool));
     canvas.isDrawingMode = tool === 'pen' || tool === 'eraser';
     canvas.selection = tool === 'select';
-    canvas.defaultCursor = tool === 'select' ? 'default' : 'crosshair';
+    canvas.defaultCursor = tool === 'pan' ? 'grab' : (tool === 'select' ? 'default' : 'crosshair');
     canvas.forEachObject((o) => (o.selectable = tool === 'select'));
     if (tool === 'pen') {
       canvas.freeDrawingBrush = penBrush;
@@ -159,10 +160,52 @@ function start(room) {
     }
   });
 
+  /* --- Навигация: перемещение полотна и масштаб (локально, не синхронизируется) --- */
+  let isPanning = false, lastPosX = 0, lastPosY = 0, spaceDown = false;
+  const isPanMode = () => currentTool === 'pan' || spaceDown;
+
+  // Зум колесом мыши к точке курсора
+  canvas.on('mouse:wheel', (opt) => {
+    let zoom = canvas.getZoom() * Math.pow(0.999, opt.e.deltaY);
+    zoom = Math.min(5, Math.max(0.15, zoom)); // ограничиваем масштаб
+    canvas.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, zoom);
+    opt.e.preventDefault();
+    opt.e.stopPropagation();
+  });
+
+  // Пробел временно включает «руку» (как в графических редакторах)
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' && !(document.activeElement && document.activeElement.isContentEditable)) {
+      const ao = canvas.getActiveObject();
+      if (ao && ao.isEditing) return; // печатаем пробел в тексте
+      spaceDown = true;
+      canvas.defaultCursor = 'grab';
+      e.preventDefault();
+    }
+  });
+  window.addEventListener('keyup', (e) => {
+    if (e.code === 'Space') { spaceDown = false; canvas.defaultCursor = currentTool === 'select' ? 'default' : 'crosshair'; }
+  });
+
+  // Сброс вида: масштаб 1, позиция в начало
+  document.getElementById('resetViewBtn').onclick = () => {
+    canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+    canvas.requestRenderAll();
+  };
+
   /* --- Рисование фигур мышью --- */
   let draft = null, startX = 0, startY = 0;
 
   canvas.on('mouse:down', (opt) => {
+    // перемещение полотна (инструмент «рука» или зажатый пробел)
+    if (isPanMode()) {
+      isPanning = true;
+      canvas.selection = false;
+      canvas.setCursor('grabbing');
+      lastPosX = opt.e.clientX;
+      lastPosY = opt.e.clientY;
+      return;
+    }
     // карандаш и ластик рисуются самим Fabric (isDrawingMode), мышью фигуры тут не строим
     if (currentTool === 'select' || currentTool === 'pen' || currentTool === 'eraser') return;
     const p = canvas.getPointer(opt.e);
@@ -184,6 +227,15 @@ function start(room) {
   });
 
   canvas.on('mouse:move', (opt) => {
+    if (isPanning) {
+      const vpt = canvas.viewportTransform;
+      vpt[4] += opt.e.clientX - lastPosX;
+      vpt[5] += opt.e.clientY - lastPosY;
+      lastPosX = opt.e.clientX;
+      lastPosY = opt.e.clientY;
+      canvas.requestRenderAll();
+      return;
+    }
     if (!draft) return;
     const p = canvas.getPointer(opt.e);
     if (currentTool === 'rect') {
@@ -197,6 +249,12 @@ function start(room) {
   });
 
   canvas.on('mouse:up', () => {
+    if (isPanning) {
+      isPanning = false;
+      canvas.selection = currentTool === 'select';
+      canvas.setCursor(isPanMode() ? 'grab' : 'default');
+      return;
+    }
     if (!draft) return;
     draft.setCoords();
     socket.emit('object:added', serialize(draft)); // теперь транслируем готовую фигуру
