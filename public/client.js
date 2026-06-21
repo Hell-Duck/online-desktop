@@ -368,12 +368,31 @@ function start(room) {
     imageInput.value = '';
   };
 
-  // Вставить скопированные объекты доски со смещением
-  function pasteInternal() {
+  // Отслеживаем позицию курсора в экранных координатах (для вставки под мышку)
+  let lastClient = null;
+  window.addEventListener('mousemove', (e) => { lastClient = { x: e.clientX, y: e.clientY }; });
+
+  // Экран -> координаты сцены с учётом сдвига/зума. null, если курсор вне области доски.
+  function clientToScene(clientX, clientY) {
+    const rect = canvas.upperCanvasEl.getBoundingClientRect();
+    const x = clientX - rect.left, y = clientY - rect.top;
+    if (x < 0 || y < 0 || x > rect.width || y > rect.height) return null;
+    const inv = fabric.util.invertTransform(canvas.viewportTransform);
+    return fabric.util.transformPoint(new fabric.Point(x, y), inv);
+  }
+  // Центр видимой области в координатах сцены
+  function viewportCenterScene() {
+    const inv = fabric.util.invertTransform(canvas.viewportTransform);
+    return fabric.util.transformPoint(new fabric.Point(canvas.getWidth() / 2, canvas.getHeight() / 2), inv);
+  }
+
+  // Вставить скопированные объекты доски с центром в точке point (сцена)
+  function pasteInternal(point) {
     if (!internalClipboard) return;
     internalClipboard.clone((clone) => {
       canvas.discardActiveObject();
-      clone.set({ left: (clone.left || 0) + 20, top: (clone.top || 0) + 20 });
+      const p = point || viewportCenterScene();
+      clone.setPositionByOrigin(new fabric.Point(p.x, p.y), 'center', 'center'); // центр вставки = курсор/центр экрана
       if (clone.type === 'activeSelection') {
         // группа объектов: добавляем каждый отдельно с новым id (каждый разошлётся как object:added)
         clone.canvas = canvas;
@@ -397,10 +416,10 @@ function start(room) {
     const cd = e.clipboardData || window.clipboardData;
     const text = cd ? cd.getData('text/plain') : '';
 
-    // последним копировали объекты доски -> вставляем их
+    // последним копировали объекты доски -> вставляем их под курсор (или в центр экрана)
     if (text && text.indexOf(CLIP_MARKER) === 0 && internalClipboard) {
       e.preventDefault();
-      pasteInternal();
+      pasteInternal(lastClient ? clientToScene(lastClient.x, lastClient.y) : null);
       return;
     }
     // иначе — картинка из системного буфера (скриншот и т.п.)
