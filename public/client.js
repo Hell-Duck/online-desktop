@@ -58,6 +58,7 @@ function start(room) {
   let applyingRemote = false; // подавляет повторную трансляцию при применении чужих изменений
   let currentTool = 'select';
   let currentColor = document.getElementById('color').value;
+  let currentSheet = 'white'; // вид листа: white | ruled | grid
 
   /* --- Трансляция локальных изменений --- */
   const serialize = (obj) => obj.toObject();
@@ -108,17 +109,22 @@ function start(room) {
     if (obj) { applyingRemote = true; canvas.remove(obj); applyingRemote = false; }
   });
   socket.on('canvas:cleared', () => {
-    applyingRemote = true; canvas.clear(); canvas.backgroundColor = '#ffffff'; canvas.renderAll(); applyingRemote = false;
+    applyingRemote = true; canvas.clear(); applySheet(currentSheet); canvas.renderAll(); applyingRemote = false;
   });
 
-  // Синхронизация состояния при входе нового участника
+  // Синхронизация состояния при входе нового участника (объекты + вид листа)
   socket.on('request-state', (newId) => {
-    socket.emit('send-state', { to: newId, state: canvas.toJSON(['id']) });
+    socket.emit('send-state', { to: newId, state: { objects: canvas.toJSON(['id']), sheet: currentSheet } });
   });
   socket.on('load-state', (state) => {
     applyingRemote = true;
-    canvas.loadFromJSON(state, () => { canvas.renderAll(); applyingRemote = false; });
+    canvas.loadFromJSON(state.objects, () => {
+      if (state.sheet) applySheet(state.sheet);
+      canvas.renderAll();
+      applyingRemote = false;
+    });
   });
+  socket.on('sheet:set', ({ type }) => applySheet(type)); // чужой сменил вид листа
 
   socket.on('peers', (n) => { document.getElementById('peerCount').textContent = n; });
 
@@ -324,10 +330,48 @@ function start(room) {
   document.getElementById('clearBtn').onclick = () => {
     if (!confirm('Очистить доску у всех участников?')) return;
     canvas.clear();
-    canvas.backgroundColor = '#ffffff';
+    applySheet(currentSheet); // очищаем объекты, но вид листа сохраняем
     canvas.renderAll();
     socket.emit('canvas:cleared');
   };
 
+  /* --- Вид листа (белый / линейка / клетка) --- */
+  // Фон рисуется паттерном; backgroundVpt=true по умолчанию => линии двигаются и масштабируются вместе с полотном
+  function makeSheetTile(type) {
+    const size = 32;
+    const t = document.createElement('canvas');
+    t.width = size; t.height = size;
+    const ctx = t.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, size, size);
+    ctx.strokeStyle = '#cfd8e3';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    if (type === 'grid') {
+      ctx.moveTo(0.5, 0); ctx.lineTo(0.5, size);   // вертикаль
+      ctx.moveTo(0, 0.5); ctx.lineTo(size, 0.5);   // горизонталь
+    } else if (type === 'ruled') {
+      ctx.moveTo(0, 0.5); ctx.lineTo(size, 0.5);   // только горизонтали
+    }
+    ctx.stroke();
+    return t;
+  }
+  function applySheet(type) {
+    currentSheet = type;
+    const sel = document.getElementById('sheet');
+    if (sel.value !== type) sel.value = type;
+    if (type === 'white') {
+      canvas.setBackgroundColor('#ffffff', () => canvas.requestRenderAll());
+    } else {
+      const pattern = new fabric.Pattern({ source: makeSheetTile(type), repeat: 'repeat' });
+      canvas.setBackgroundColor(pattern, () => canvas.requestRenderAll());
+    }
+  }
+  document.getElementById('sheet').addEventListener('change', (e) => {
+    applySheet(e.target.value);
+    socket.emit('sheet:set', { type: currentSheet }); // синхронизируем вид со вторым участником
+  });
+
+  applySheet('white');
   setTool('select');
 }

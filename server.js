@@ -34,7 +34,7 @@ io.on('connection', (socket) => {
   });
 
   // Транслировать любое изменение доски всем в комнате, кроме отправителя
-  ['object:added', 'object:modified', 'object:removed', 'canvas:cleared'].forEach((ev) => {
+  ['object:added', 'object:modified', 'object:removed', 'canvas:cleared', 'sheet:set'].forEach((ev) => {
     socket.on(ev, (data) => {
       if (currentRoom) socket.to(currentRoom).emit(ev, data);
     });

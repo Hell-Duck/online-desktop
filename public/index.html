@@ -42,6 +42,7 @@
     #toolbar button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
     #toolbar .sep { width: 1px; height: 28px; background: #e5e7eb; margin: 0 4px; }
     #toolbar input[type=color] { width: 34px; height: 34px; border: none; background: none; cursor: pointer; }
+    #toolbar select { border: 1px solid #d0d4db; background: #fff; border-radius: 8px; padding: 6px 8px; font-size: 14px; cursor: pointer; }
     #toolbar .room-info { margin-left: auto; font-size: 13px; color: #6b7280; }
     #toolbar .room-info b { color: #111; }
     canvas { display: block; }
@@ -67,6 +68,12 @@
     <button data-tool="circle" title="Круг">◯</button>
     <button data-tool="line" title="Линия">╱</button>
     <button data-tool="eraser" title="Стёрка (удаляет объект целиком)">🧽</button>
+    <div class="sep"></div>
+    <select id="sheet" title="Вид листа">
+      <option value="white">Белый</option>
+      <option value="ruled">Линейка</option>
+      <option value="grid">Клетка</option>
+    </select>
     <div class="sep"></div>
     <input type="color" id="color" value="#222222" title="Цвет" />
     <button id="imageBtn" title="Вставить картинку">🖼 Картинка</button>
