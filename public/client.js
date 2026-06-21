@@ -305,24 +305,39 @@ function start(room) {
     // для фигур толщина применяется при создании (widths.shape)
   });
 
-  /* --- Контекстное меню текста (размер, Ж/К/Ч) — видно только при работе с текстом --- */
+  /* --- Контекстное меню текста: применяется к выделенному фрагменту, иначе ко всему объекту --- */
   const isText = (o) => !!o && (o.type === 'i-text' || o.type === 'text');
-  function updateTextMenu() {
-    const o = canvas.getActiveObject();
-    const show = isText(o);
-    document.getElementById('textToolbar').style.display = show ? 'flex' : 'none';
-    if (!show) return;
-    document.getElementById('fontSize').value = Math.round(o.fontSize || 22);
-    document.getElementById('boldBtn').classList.toggle('active', o.fontWeight === 'bold');
-    document.getElementById('italicBtn').classList.toggle('active', o.fontStyle === 'italic');
-    document.getElementById('underlineBtn').classList.toggle('active', !!o.underline);
+  // активный диапазон выделения внутри редактируемого текста (или null)
+  const liveRange = (o) => (o.isEditing && o.selectionStart !== o.selectionEnd) ? { start: o.selectionStart, end: o.selectionEnd } : null;
+  let pendingRange = null; // диапазон, запомненный до потери фокуса (клик в «Размер»/цвет)
+  // эффективный диапазон: живой важнее запомненного
+  const effRange = (o) => liveRange(o) || (pendingRange && pendingRange.id === o.id ? pendingRange : null);
+
+  // удалить посимвольное переопределение свойства (чтобы значение объекта применилось единообразно)
+  function clearCharStyleProp(o, prop) {
+    if (!o.styles) return;
+    for (const line in o.styles) for (const ch in o.styles[line]) delete o.styles[line][ch][prop];
   }
-  // Применить стиль к активному тексту: разослать и записать в историю
-  function applyTextStyle(applyFn) {
+  // во всём диапазоне эффективное значение свойства равно value?
+  function rangeAllEquals(o, prop, value, r) {
+    const styles = o.getSelectionStyles(r.start, r.end);
+    return styles.length > 0 && styles.every((s) => (s[prop] !== undefined ? s[prop] : o[prop]) === value);
+  }
+  // запомнить текущий диапазон перед уходом фокуса
+  function captureRange() {
+    const o = canvas.getActiveObject();
+    const r = isText(o) ? liveRange(o) : null;
+    pendingRange = r ? { id: o.id, start: r.start, end: r.end } : null;
+  }
+
+  // применить значение свойства к диапазону (посимвольно) или ко всему объекту; разослать и в историю
+  function applyTextProp(prop, value, range) {
     const o = canvas.getActiveObject();
     if (!isText(o)) return;
     const before = stateCache[o.id];
-    applyFn(o);
+    if (range) o.setSelectionStyles({ [prop]: value }, range.start, range.end);
+    else { o.set(prop, value); clearCharStyleProp(o, prop); }
+    o.initDimensions();
     o.setCoords();
     canvas.requestRenderAll();
     socket.emit('object:modified', serialize(o));
@@ -330,33 +345,62 @@ function start(room) {
     pushHist({ kind: 'modify', id: o.id, before });
     updateTextMenu();
   }
+  // переключить свойство (Ж/К/Ч): кнопки сохраняют выделение -> используем только живой диапазон
+  function toggleTextProp(prop, onVal, offVal) {
+    const o = canvas.getActiveObject();
+    if (!isText(o)) return;
+    const r = liveRange(o);
+    const isOn = r ? rangeAllEquals(o, prop, onVal, r) : (o[prop] === onVal);
+    applyTextProp(prop, isOn ? offVal : onVal, r);
+  }
+
+  function updateTextMenu() {
+    const o = canvas.getActiveObject();
+    const show = isText(o);
+    document.getElementById('textToolbar').style.display = show ? 'flex' : 'none';
+    if (!show) return;
+    const r = liveRange(o);
+    const on = (prop, onVal) => r ? rangeAllEquals(o, prop, onVal, r) : (o[prop] === onVal);
+    let size = o.fontSize;
+    if (r) { const s = o.getSelectionStyles(r.start, r.end); if (s[0] && s[0].fontSize !== undefined) size = s[0].fontSize; }
+    document.getElementById('fontSize').value = Math.round(size || 22);
+    document.getElementById('boldBtn').classList.toggle('active', on('fontWeight', 'bold'));
+    document.getElementById('italicBtn').classList.toggle('active', on('fontStyle', 'italic'));
+    document.getElementById('underlineBtn').classList.toggle('active', on('underline', true));
+  }
+
+  // «Размер» и выбор цвета забирают фокус у текста — запоминаем диапазон по mousedown
+  document.getElementById('fontSize').addEventListener('mousedown', captureRange);
+  document.getElementById('color').addEventListener('mousedown', captureRange);
   document.getElementById('fontSize').addEventListener('input', (e) => {
     const v = parseInt(e.target.value, 10);
-    if (v) applyTextStyle((o) => o.set('fontSize', v));
+    const o = canvas.getActiveObject();
+    if (v && isText(o)) applyTextProp('fontSize', v, effRange(o)); // размер: живой или запомненный диапазон
   });
-  // mousedown.preventDefault — чтобы клик по кнопке не сбрасывал выделение текста
+  // Ж/К/Ч не теряют выделение (preventDefault), поэтому диапазон остаётся «живым»
   ['boldBtn', 'italicBtn', 'underlineBtn'].forEach((id) => {
     document.getElementById(id).addEventListener('mousedown', (e) => e.preventDefault());
   });
-  document.getElementById('boldBtn').onclick = () => applyTextStyle((o) => o.set('fontWeight', o.fontWeight === 'bold' ? 'normal' : 'bold'));
-  document.getElementById('italicBtn').onclick = () => applyTextStyle((o) => o.set('fontStyle', o.fontStyle === 'italic' ? 'normal' : 'italic'));
-  document.getElementById('underlineBtn').onclick = () => applyTextStyle((o) => o.set('underline', !o.underline));
+  document.getElementById('boldBtn').onclick = () => toggleTextProp('fontWeight', 'bold', 'normal');
+  document.getElementById('italicBtn').onclick = () => toggleTextProp('fontStyle', 'italic', 'normal');
+  document.getElementById('underlineBtn').onclick = () => toggleTextProp('underline', true, false);
 
-  // Реакция на изменение выделения — обновляем меню текста и ползунок толщины
+  // Обновляем меню/толщину при смене выделения и при работе с текстом
   ['selection:created', 'selection:updated', 'selection:cleared'].forEach((ev) => {
-    canvas.on(ev, () => { updateThicknessUI(); updateTextMenu(); });
+    canvas.on(ev, () => { pendingRange = null; updateThicknessUI(); updateTextMenu(); });
   });
+  ['text:selection:changed', 'text:editing:entered', 'text:editing:exited'].forEach((ev) => canvas.on(ev, updateTextMenu));
   toolButtons.forEach((b) => (b.onclick = () => setTool(b.dataset.tool)));
 
   document.getElementById('color').addEventListener('input', (e) => {
     currentColor = e.target.value;
     if (canvas.isDrawingMode) canvas.freeDrawingBrush.color = currentColor;
     const active = canvas.getActiveObject();
-    if (active) {
-      if (active.type === 'i-text') active.set('fill', currentColor);
-      else active.set('stroke', currentColor);
-      canvas.requestRenderAll();
-      socket.emit('object:modified', serialize(active));
+    if (!active) return;
+    if (isText(active)) {
+      applyTextProp('fill', currentColor, effRange(active)); // цвет текста — фрагмент или весь
+    } else {
+      modifySelected((o) => { if (o.type === 'image') return false; o.set('stroke', currentColor); });
     }
   });
 
