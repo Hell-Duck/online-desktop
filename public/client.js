@@ -420,15 +420,15 @@ function start(room) {
       const ao = canvas.getActiveObject();
       if (ao && !ao.isEditing) { e.preventDefault(); deleteActive(); }
     }
-    // Ctrl+Z / Cmd+Z — отмена (не перехватываем при редактировании текста)
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+    // Ctrl+Z / Cmd+Z — отмена. Сравниваем по e.code (физическая клавиша), чтобы работало в любой раскладке
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.code === 'KeyZ') {
       const ao = canvas.getActiveObject();
       if (ao && ao.isEditing) return; // пусть браузер отменяет ввод в тексте
       e.preventDefault();
       undo();
     }
     // Ctrl+C — копировать выделенное во внутренний буфер
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyC') {
       const ao = canvas.getActiveObject();
       if (ao && ao.isEditing) return; // копируется текст внутри блока — не мешаем
       if (ao) ao.clone((cloned) => { internalClipboard = cloned; }, ['id', 'eraser']);
