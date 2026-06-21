@@ -69,101 +69,112 @@ function start(room) {
   };
   const CLIP_MARKER = 'ONLINE_DESKTOP_OBJECTS'; // метка в системном буфере: «последним копировали доску»
 
-  /* --- Трансляция локальных изменений --- */
+  /* --- Синхронизация и ОБЩАЯ история (единый стек на сервере) --- */
   const serialize = (obj) => obj.toObject();
-
-  /* --- История для отмены (Ctrl+Z) --- */
-  const history = [];          // стек обратимых операций
-  const stateCache = {};       // id -> последнее известное состояние объекта (для diff при изменении)
-  const MAX_HISTORY = 60;
+  const stateCache = {};       // id -> последнее известное состояние объекта (для before при изменении)
   const byId = (id) => canvas.getObjects().find((o) => o.id === id);
   const cacheObj = (obj) => { if (obj && obj.id) stateCache[obj.id] = serialize(obj); };
-  function pushHist(entry) {
-    history.push(entry);
-    if (history.length > MAX_HISTORY) history.shift();
-  }
 
+  // applyingRemote через счётчик — корректно при нескольких асинхронных enliven подряд (batch/clear)
+  let remoteDepth = 0;
+  const beginRemote = () => { remoteDepth++; applyingRemote = true; };
+  const endRemote = () => { remoteDepth = Math.max(0, remoteDepth - 1); applyingRemote = remoteDepth > 0; };
+
+  // Отправить операцию: сервер запишет её в общую историю и применит у остальных участников
+  const sendOp = (op) => socket.emit('op', op);
+
+  // --- Локальные изменения превращаем в операции для общей истории ---
   canvas.on('object:added', (e) => {
     const obj = e.target;
     if (!obj.id) obj.id = uid();
     if (applyingRemote) return;
-    socket.emit('object:added', serialize(obj));
     cacheObj(obj);
-    pushHist({ kind: 'add', id: obj.id });
+    sendOp({ kind: 'add', obj: serialize(obj) });
   });
   canvas.on('object:modified', (e) => {
     if (applyingRemote) return;
     const obj = e.target;
-    pushHist({ kind: 'modify', id: obj.id, before: stateCache[obj.id] }); // before — состояние до изменения
-    socket.emit('object:modified', serialize(obj));
+    const before = stateCache[obj.id];
     cacheObj(obj);
+    sendOp({ kind: 'modify', before, after: serialize(obj) });
   });
   canvas.on('text:changed', (e) => {
     if (applyingRemote) return;
-    socket.emit('object:modified', serialize(e.target));
-    cacheObj(e.target); // в историю не пишем (иначе откат по каждой букве)
+    const obj = e.target;
+    const before = stateCache[obj.id];
+    cacheObj(obj);
+    sendOp({ kind: 'modify', before, after: serialize(obj) });
   });
   canvas.on('object:removed', (e) => {
     if (applyingRemote) return;
     if (e.target && e.target.id) {
-      pushHist({ kind: 'remove', json: serialize(e.target) }); // чтобы откат вернул объект
-      socket.emit('object:removed', { id: e.target.id });
+      const obj = stateCache[e.target.id] || serialize(e.target);
+      sendOp({ kind: 'remove', obj });
       delete stateCache[e.target.id];
     }
   });
-  // Ластик стёр части объектов -> разослать обновлённые объекты (с маской eraser) остальным
+  // Ластик стёр части объектов -> одна операция batch (один откат вернёт весь штрих)
   canvas.on('erasing:end', (e) => {
     if (applyingRemote || !e || !e.targets) return;
-    const ops = [];
+    const items = [];
     e.targets.forEach((obj) => {
       if (!obj.id) return;
-      ops.push({ id: obj.id, before: stateCache[obj.id] });
-      socket.emit('object:modified', serialize(obj));
+      const before = stateCache[obj.id];
       cacheObj(obj);
+      items.push({ before, after: serialize(obj) });
     });
-    if (ops.length) pushHist({ kind: 'batch', ops }); // один Ctrl+Z отменит весь штрих ластика
+    if (items.length) sendOp({ kind: 'batch', items });
   });
 
-  /* --- Применение отмены --- */
-  // Восстановить объект в заданном (предыдущем) состоянии и разослать остальным
-  function restoreObject(json) {
-    applyingRemote = true;
+  /* --- Применение операций (чужие правки, undo, redo — всё от сервера) --- */
+  function upsertLocal(json) {
+    beginRemote();
     const ex = byId(json.id);
     if (ex) canvas.remove(ex);
     fabric.util.enlivenObjects([json], ([o]) => {
       o.id = json.id;
+      o.erasable = !(currentTool === 'eraser-soft' && o.type === 'image'); // защита картинок в мягком режиме
       o.selectable = currentTool === 'select';
       canvas.add(o);
       cacheObj(o);
       canvas.requestRenderAll();
-      applyingRemote = false;
+      endRemote();
     });
-    socket.emit('object:modified', json); // у второго участника применится через upsert
   }
-  function removeById(id) {
+  function removeLocal(id) {
+    beginRemote();
     const o = byId(id);
-    if (o) { applyingRemote = true; canvas.remove(o); applyingRemote = false; }
+    if (o) canvas.remove(o);
     delete stateCache[id];
-    socket.emit('object:removed', { id });
+    endRemote();
   }
-  function undo() {
-    const entry = history.pop();
-    if (!entry) return;
-    if (entry.kind === 'add') {
-      removeById(entry.id);                       // откат добавления = удалить
-    } else if (entry.kind === 'remove') {
-      if (entry.json) restoreObject(entry.json);  // откат удаления = вернуть
-    } else if (entry.kind === 'modify') {
-      if (entry.before) restoreObject(entry.before); // откат изменения = вернуть прошлое состояние
-      else removeById(entry.id);                  // before нет => объект был новым
-    } else if (entry.kind === 'batch') {
-      entry.ops.forEach((op) => { if (op.before) restoreObject(op.before); });
+  function clearLocal() {
+    beginRemote();
+    canvas.clear();
+    applySheet(currentSheet);
+    canvas.renderAll();
+    endRemote();
+  }
+  function applyOp(op, dir) {
+    if (op.kind === 'add') {
+      if (dir === 'forward') upsertLocal(op.obj); else removeLocal(op.obj.id);
+    } else if (op.kind === 'remove') {
+      if (dir === 'forward') removeLocal(op.obj.id); else upsertLocal(op.obj);
+    } else if (op.kind === 'modify') {
+      const json = dir === 'forward' ? op.after : op.before;
+      if (json) upsertLocal(json);
+    } else if (op.kind === 'batch') {
+      op.items.forEach((i) => { const j = dir === 'forward' ? i.after : i.before; if (j) upsertLocal(j); });
+    } else if (op.kind === 'clear') {
+      if (dir === 'forward') clearLocal();
+      else (op.objs || []).forEach((j) => upsertLocal(j));
     }
     canvas.discardActiveObject();
     canvas.requestRenderAll();
   }
+  socket.on('op:apply', ({ op, dir }) => applyOp(op, dir));
 
-  // Изменить выделенные объекты (applyFn для каждого), разослать и записать в историю.
+  // Изменить выделенные объекты (applyFn для каждого) и отправить операции.
   // Для группы фиксируем абсолютные координаты, чтобы не разослать относительные (как при вставке).
   function modifySelected(applyFn) {
     const active = canvas.getActiveObject();
@@ -182,50 +193,24 @@ function start(room) {
       if (applyFn(o) === false) return; // объект не подходит — пропустить
       changed = true;
       o.setCoords();
-      socket.emit('object:modified', serialize(o));
       cacheObj(o);
-      pushHist({ kind: 'modify', id: o.id, before });
+      sendOp({ kind: 'modify', before, after: serialize(o) });
     });
     if (wasSelection) canvas.setActiveObject(new fabric.ActiveSelection(targets, { canvas }));
     canvas.requestRenderAll();
     return changed;
   }
 
-  /* --- Применение удалённых изменений --- */
-  function upsert(json) {
-    applyingRemote = true;
-    const existing = canvas.getObjects().find((o) => o.id === json.id);
-    if (existing) canvas.remove(existing);
-    fabric.util.enlivenObjects([json], ([obj]) => {
-      obj.id = json.id;
-      obj.erasable = !(currentTool === 'eraser-soft' && obj.type === 'image'); // защита картинок в мягком режиме
-      canvas.add(obj);
-      cacheObj(obj); // запоминаем состояние чужого объекта для возможной отмены его перемещения
-      canvas.requestRenderAll();
-      applyingRemote = false;
-    });
-  }
-
-  socket.on('object:added', upsert);
-  socket.on('object:modified', upsert);
-  socket.on('object:removed', ({ id }) => {
-    const obj = canvas.getObjects().find((o) => o.id === id);
-    if (obj) { applyingRemote = true; canvas.remove(obj); applyingRemote = false; }
-  });
-  socket.on('canvas:cleared', () => {
-    applyingRemote = true; canvas.clear(); applySheet(currentSheet); canvas.renderAll(); applyingRemote = false;
-  });
-
   // Синхронизация состояния при входе нового участника (объекты + вид листа)
   socket.on('request-state', (newId) => {
     socket.emit('send-state', { to: newId, state: { objects: canvas.toJSON(['id']), sheet: currentSheet } });
   });
   socket.on('load-state', (state) => {
-    applyingRemote = true;
+    beginRemote();
     canvas.loadFromJSON(state.objects, () => {
       if (state.sheet) applySheet(state.sheet);
       canvas.renderAll();
-      applyingRemote = false;
+      endRemote();
     });
   });
   socket.on('sheet:set', ({ type }) => applySheet(type)); // чужой сменил вид листа
@@ -341,9 +326,8 @@ function start(room) {
     o.initDimensions();
     o.setCoords();
     canvas.requestRenderAll();
-    socket.emit('object:modified', serialize(o));
     cacheObj(o);
-    pushHist({ kind: 'modify', id: o.id, before });
+    sendOp({ kind: 'modify', before, after: serialize(o) });
     updateTextMenu();
   }
   // переключить свойство (Ж/К/Ч): кнопки сохраняют выделение -> используем только живой диапазон
@@ -468,7 +452,7 @@ function start(room) {
     if (currentTool === 'rect') draft = new fabric.Rect({ ...common, width: 0, height: 0 });
     else if (currentTool === 'circle') draft = new fabric.Ellipse({ ...common, rx: 0, ry: 0 });
     else if (currentTool === 'line') draft = new fabric.Line([p.x, p.y, p.x, p.y], { stroke: currentColor, strokeWidth: widths.shape, id: uid() });
-    if (draft) { applyingRemote = true; canvas.add(draft); applyingRemote = false; } // не транслируем пустую заготовку
+    if (draft) { beginRemote(); canvas.add(draft); endRemote(); } // не транслируем пустую заготовку
   });
 
   canvas.on('mouse:move', (opt) => {
@@ -502,9 +486,8 @@ function start(room) {
     }
     if (!draft) return;
     draft.setCoords();
-    socket.emit('object:added', serialize(draft)); // теперь транслируем готовую фигуру
     cacheObj(draft);
-    pushHist({ kind: 'add', id: draft.id }); // фигуру тоже можно отменить
+    sendOp({ kind: 'add', obj: serialize(draft) }); // готовая фигура -> операция add
     draft = null;
     setTool('select');
   });
@@ -569,21 +552,20 @@ function start(room) {
         // снятием выделения, и только потом транслируем и пишем историю.
         clone.canvas = canvas;
         const kids = clone.getObjects();
-        applyingRemote = true;
+        beginRemote();
         kids.forEach((o) => { o.id = uid(); canvas.add(o); });
         canvas.setActiveObject(clone);
         canvas.discardActiveObject(); // <- здесь дети получают абсолютные left/top
-        applyingRemote = false;
+        endRemote();
         kids.forEach((o) => {
           o.setCoords();
-          socket.emit('object:added', serialize(o)); // теперь координаты верные
           cacheObj(o);
-          pushHist({ kind: 'add', id: o.id });
+          sendOp({ kind: 'add', obj: serialize(o) }); // теперь координаты верные
         });
         canvas.setActiveObject(new fabric.ActiveSelection(kids, { canvas })); // вернём групповое выделение
       } else {
         clone.id = uid();
-        canvas.add(clone); // одиночный: object:added сам разошлёт и запишет историю
+        canvas.add(clone); // одиночный: object:added сам отправит операцию add
         canvas.setActiveObject(clone);
       }
       canvas.requestRenderAll();
@@ -629,12 +611,15 @@ function start(room) {
       const ao = canvas.getActiveObject();
       if (ao && !ao.isEditing) { e.preventDefault(); deleteActive(); }
     }
-    // Ctrl+Z / Cmd+Z — отмена. Сравниваем по e.code (физическая клавиша), чтобы работало в любой раскладке
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.code === 'KeyZ') {
-      const ao = canvas.getActiveObject();
-      if (ao && ao.isEditing) return; // пусть браузер отменяет ввод в тексте
+    const ao = canvas.getActiveObject();
+    if (ao && ao.isEditing) return; // в режиме текста отдаём отмену браузеру
+    // Ctrl+Z — отмена; Ctrl+Shift+Z или Ctrl+Y — повтор. Сравниваем по e.code (любая раскладка).
+    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ' && !e.shiftKey) {
       e.preventDefault();
-      undo();
+      socket.emit('undo'); // отмена в общей истории на сервере
+    } else if ((e.ctrlKey || e.metaKey) && (e.code === 'KeyY' || (e.code === 'KeyZ' && e.shiftKey))) {
+      e.preventDefault();
+      socket.emit('redo'); // повтор
     }
   });
 
@@ -648,11 +633,15 @@ function start(room) {
     e.preventDefault();
   });
   document.getElementById('clearBtn').onclick = () => {
+    const objs = canvas.getObjects().map((o) => serialize(o));
+    if (!objs.length) return;
     if (!confirm('Очистить доску у всех участников?')) return;
+    beginRemote();                  // молча убираем объекты, чтобы не сыпать remove-операциями
     canvas.clear();
-    applySheet(currentSheet); // очищаем объекты, но вид листа сохраняем
+    applySheet(currentSheet);       // объекты убираем, вид листа сохраняем
     canvas.renderAll();
-    socket.emit('canvas:cleared');
+    endRemote();
+    sendOp({ kind: 'clear', objs }); // одна операция clear (её можно отменить)
   };
 
   // Защита от случайного закрытия/перезагрузки: встроенный диалог браузера, если на доске что-то есть
