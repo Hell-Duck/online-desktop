@@ -678,15 +678,23 @@ function start(room) {
     });
     const pad = 24; // поля вокруг содержимого
     minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+    const contentW = maxX - minX, contentH = maxY - minY;
 
-    const dataURL = canvas.toDataURL({
-      format: 'png', multiplier: 2,
-      left: minX, top: minY, width: maxX - minX, height: maxY - minY,
-    });
+    // Браузер ограничивает размер canvas. Подбираем множитель так, чтобы PNG влезал в лимиты:
+    // желаемое 2×, но не больше MAX_DIM по стороне и MAX_AREA по площади.
+    const MAX_DIM = 8192, MAX_AREA = 8192 * 8192;
+    let mult = Math.min(2, MAX_DIM / contentW, MAX_DIM / contentH, Math.sqrt(MAX_AREA / (contentW * contentH)));
+    if (!isFinite(mult) || mult <= 0) mult = 1;
+
+    const dataURL = canvas.toDataURL({ format: 'png', multiplier: mult, left: minX, top: minY, width: contentW, height: contentH });
 
     canvas.setViewportTransform(savedVpt); // вернуть прежний вид
     canvas.requestRenderAll();
 
+    if (!dataURL || dataURL.length < 100) { // подстраховка, если браузер всё же не справился
+      alert('Не удалось сохранить: область слишком большая. Сдвиньте объекты ближе друг к другу.');
+      return;
+    }
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
     const a = document.createElement('a');
     a.href = dataURL;
