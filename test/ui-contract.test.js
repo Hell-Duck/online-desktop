@@ -25,3 +25,13 @@ test('board utilities load before the client', () => {
   const clientAt = html.indexOf('/client.js');
   assert.ok(utilsAt >= 0 && clientAt > utilsAt);
 });
+
+test('interface exposes the green collaborative visual theme', () => {
+  for (const token of ['--accent:', '--accent-soft:', '--secondary:', '--panel-shadow:']) {
+    assert.match(html, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  assert.match(html, /class=["']brand-mark["']/);
+  assert.match(html, /class=["']tool-group/);
+  assert.match(html, /class=["']palette-label["']/);
+  assert.match(html, /@media\s*\(max-width:\s*760px\)/);
+});
