@@ -9,8 +9,8 @@ test('board exposes mouse controls for shared history and zoom', () => {
   for (const id of ['undoBtn', 'redoBtn', 'zoomLabel']) {
     assert.match(html, new RegExp(`id=["']${id}["']`), `missing #${id}`);
   }
-  assert.match(html, /id=["']undoBtn["'][^>]*>[^<]*Отменить/);
-  assert.match(html, /id=["']redoBtn["'][^>]*>[^<]*Повторить/);
+  assert.match(html, /id=["']undoBtn["'][^>]*>[\s\S]*?Отменить[\s\S]*?<\/button>/);
+  assert.match(html, /id=["']redoBtn["'][^>]*>[\s\S]*?Повторить[\s\S]*?<\/button>/);
 });
 
 test('persistent palette offers common colors and a custom color input', () => {
@@ -34,4 +34,17 @@ test('interface exposes the green collaborative visual theme', () => {
   assert.match(html, /class=["']tool-group/);
   assert.match(html, /class=["']palette-label["']/);
   assert.match(html, /@media\s*\(max-width:\s*760px\)/);
+});
+
+test('board keeps room presence visible and removes redundant controls', () => {
+  assert.match(html, /class=["'][^"']*room-status[^"']*["']/);
+  assert.match(html, /id=["']roomLabel["']/);
+  assert.match(html, /id=["']peerCount["']/);
+  assert.doesNotMatch(html, /id=["']findBtn["']/);
+  assert.doesNotMatch(html, /id=["']deleteBtn["']/);
+});
+
+test('board controls use a consistent inline icon system', () => {
+  const icons = html.match(/<svg[^>]*class=["'][^"']*icon[^"']*["']/g) || [];
+  assert.ok(icons.length >= 12, `expected at least 12 inline icons, found ${icons.length}`);
 });

@@ -741,7 +741,6 @@ function start(room) {
     canvas.discardActiveObject();
     canvas.requestRenderAll();
   }
-  document.getElementById('deleteBtn').onclick = deleteActive;
   function requestUndo() {
     textBatcher.flushAll();
     socket.emit('undo');
@@ -970,19 +969,6 @@ function start(room) {
     document.getElementById('cursorBtn').classList.toggle('active', sharingCursor);
     if (!sharingCursor) hideSharedCursor(); // выключили показ — спрятать у других
   };
-  document.getElementById('findBtn').onclick = () => {
-    const list = Object.keys(remoteCursors).map((k) => remoteCursors[k]).filter((c) => c.x != null);
-    const target = list.find((c) => c.visible) || list[0];
-    if (!target) { alert('Курсор другого участника не виден. Попросите его включить показ курсора (кнопка 👁 Курсор).'); return; }
-    const zoom = canvas.getZoom();
-    const vpt = canvas.viewportTransform.slice();
-    vpt[4] = canvas.getWidth() / 2 - zoom * target.x;
-    vpt[5] = canvas.getHeight() / 2 - zoom * target.y;
-    canvas.setViewportTransform(vpt);
-    canvas.requestRenderAll();
-    renderCursors();
-  };
-
   applySheet('white');
   setTool('select');
   socket.emit('join', { room, initialView: currentView() });

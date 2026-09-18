@@ -21,6 +21,8 @@
     * { box-sizing: border-box; }
     body { margin: 0; font-family: Inter, ui-rounded, system-ui, sans-serif; background: #f2f8f4; color: var(--ink); }
     button, input, select { font: inherit; }
+    .icon { width: 18px; height: 18px; display: block; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+    button .icon { flex: 0 0 auto; }
     button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid rgba(22,166,106,.28); outline-offset: 2px; }
 
     /* ---- Экран входа ---- */
@@ -68,7 +70,8 @@
     }
     #toolbar button {
       border: 1px solid transparent; background: #f5f8f6; border-radius: 10px; padding: 7px 10px;
-      cursor: pointer; font-size: 13px; transition: background .15s, border-color .15s, transform .15s;
+      cursor: pointer; font-size: 13px; display: inline-flex; align-items: center; gap: 6px;
+      transition: background .15s, border-color .15s, transform .15s;
     }
     #toolbar button:hover { background: var(--accent-soft); border-color: #a9dfc5; color: var(--accent-strong); }
     #toolbar button:active { transform: translateY(1px); }
@@ -90,8 +93,10 @@
     #textToolbar input[type=number] { width: 56px; padding: 4px 6px; border: 1px solid #d0d4db; border-radius: 6px; font-size: 14px; }
     #textToolbar button.fmt { width: 32px; height: 32px; border: 1px solid #d0d4db; background: #fff; border-radius: 6px; cursor: pointer; font-size: 15px; }
     #textToolbar button.fmt.active { background: var(--accent); color: #fff; border-color: var(--accent); }
-    #toolbar .room-info { margin-left: auto; font-size: 13px; color: #6b7280; }
-    #toolbar .room-info b { color: #111; }
+    #toolbar .room-info { margin-left: auto; display: flex; align-items: center; gap: 7px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 11px; background: #f8fbf9; font-size: 12px; color: var(--muted); }
+    #toolbar .room-info b { color: var(--ink); max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
+    .room-status { display: inline-flex; align-items: center; gap: 5px; color: var(--accent-strong); font-weight: 750; }
+    .online-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
     #exitBtn { margin-left: 10px; border-color: #ffd4d0 !important; color: var(--danger); background: #fff6f5 !important; }
     #exitBtn:hover { background: var(--danger) !important; color: #fff; }
     #clearBtn { color: #c84d46; }
@@ -140,7 +145,8 @@
       .card { padding: 30px 24px; border-radius: 24px; }
       #toolbar { gap: 5px; padding: 0 8px; }
       #toolbar button { padding: 7px 9px; }
-      #toolbar .room-info { display: none; }
+      #toolbar .room-info { margin-left: 4px; padding: 6px 8px; }
+      #toolbar .room-info .room-caption, #toolbar .room-info .room-separator { display: none; }
       #colorPalette { right: 10px; bottom: 10px; max-width: calc(100vw - 72px); overflow-x: auto; padding: 8px; }
       .palette-label { display: none; }
       .color-swatch { width: 24px; height: 24px; flex: 0 0 auto; }
@@ -148,6 +154,26 @@
   </style>
 </head>
 <body>
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute;overflow:hidden">
+    <defs>
+      <symbol id="i-select" viewBox="0 0 24 24"><path d="M5 3l13 9-6 1.5L9 19z"/><path d="M12 13.5l4 6"/></symbol>
+      <symbol id="i-hand" viewBox="0 0 24 24"><path d="M7 11V6a2 2 0 014 0v4-6a2 2 0 014 0v6-4a2 2 0 014 0v5-2a2 2 0 014 0v5c0 4-3 7-7 7h-1c-3 0-5-1-7-4l-2-3a2 2 0 013-3l2 2"/></symbol>
+      <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20l4.5-1 10-10a2.1 2.1 0 00-3-3l-10 10z"/><path d="M14 7l3 3"/></symbol>
+      <symbol id="i-square" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/></symbol>
+      <symbol id="i-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></symbol>
+      <symbol id="i-line" viewBox="0 0 24 24"><path d="M5 19L19 5"/></symbol>
+      <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 6h14M12 6v13M8 19h8"/></symbol>
+      <symbol id="i-eraser" viewBox="0 0 24 24"><path d="M4 16l9-10a2 2 0 013 0l3 3a2 2 0 010 3l-7 8H8z"/><path d="M9 11l6 6M12 20h8"/></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-2.6 7.7-7 10-4.4-2.3-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></symbol>
+      <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="M4 17l5-5 4 4 2-2 5 4"/></symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 7l-4 4 4 4"/><path d="M5 11h8a6 6 0 016 6"/></symbol>
+      <symbol id="i-redo" viewBox="0 0 24 24"><path d="M15 7l4 4-4 4"/><path d="M19 11h-8a6 6 0 00-6 6"/></symbol>
+      <symbol id="i-view" viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/><circle cx="12" cy="12" r="3"/></symbol>
+      <symbol id="i-eye" viewBox="0 0 24 24"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6z"/><circle cx="12" cy="12" r="2.5"/></symbol>
+      <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></symbol>
+      <symbol id="i-exit" viewBox="0 0 24 24"><path d="M10 4H5v16h5M14 8l4 4-4 4M8 12h10"/></symbol>
+    </defs>
+  </svg>
   <div id="lobby">
     <div class="card">
       <div class="brand-mark" aria-hidden="true">✦</div>
@@ -162,15 +188,15 @@
 
   <!-- Левая панель инструментов рисования -->
   <div id="sidebar" class="tool-group drawing-tools">
-    <button data-tool="select" class="active" title="Выделение объектов">⬚</button>
-    <button data-tool="pan" title="Двигать полотно (или зажми пробел)">✋</button>
-    <button data-tool="pen" title="Карандаш">✏️</button>
-    <button data-tool="rect" title="Прямоугольник">▭</button>
-    <button data-tool="circle" title="Круг">◯</button>
-    <button data-tool="line" title="Линия">╱</button>
-    <button data-tool="text" title="Текст">T</button>
-    <button data-tool="eraser" title="Стёрка — стирает всё">🧽</button>
-    <button data-tool="eraser-soft" title="Стёрка — не трогает вставленные картинки">🧽🛡</button>
+    <button data-tool="select" class="active" title="Выделение объектов"><svg class="icon"><use href="#i-select"/></svg></button>
+    <button data-tool="pan" title="Двигать полотно (или зажми пробел)"><svg class="icon"><use href="#i-hand"/></svg></button>
+    <button data-tool="pen" title="Карандаш"><svg class="icon"><use href="#i-pen"/></svg></button>
+    <button data-tool="rect" title="Прямоугольник"><svg class="icon"><use href="#i-square"/></svg></button>
+    <button data-tool="circle" title="Круг"><svg class="icon"><use href="#i-circle"/></svg></button>
+    <button data-tool="line" title="Линия"><svg class="icon"><use href="#i-line"/></svg></button>
+    <button data-tool="text" title="Текст"><svg class="icon"><use href="#i-text"/></svg></button>
+    <button data-tool="eraser" title="Стёрка — стирает всё"><svg class="icon"><use href="#i-eraser"/></svg></button>
+    <button data-tool="eraser-soft" title="Стёрка — не трогает вставленные картинки"><svg class="icon"><use href="#i-shield"/></svg></button>
   </div>
 
   <div id="toolbar">
@@ -184,19 +210,17 @@
       <input type="range" id="thickness" min="1" max="40" value="3" />
       <span id="thicknessVal">3</span>
     </label>
-    <button id="imageBtn" title="Вставить картинку">🖼 Картинка</button>
-    <button id="deleteBtn" title="Удалить выбранное">🗑</button>
-    <button id="undoBtn" title="Отменить последнее общее действие (Ctrl+Z)">↶ Отменить</button>
-    <button id="redoBtn" title="Повторить отменённое действие (Ctrl+Y)">↷ Повторить</button>
-    <button id="resetViewBtn" title="Сбросить масштаб и позицию">⤢ Вид</button>
+    <button id="imageBtn" title="Вставить картинку"><svg class="icon"><use href="#i-image"/></svg>Картинка</button>
+    <button id="undoBtn" title="Отменить последнее общее действие (Ctrl+Z)"><svg class="icon"><use href="#i-undo"/></svg>Отменить</button>
+    <button id="redoBtn" title="Повторить отменённое действие (Ctrl+Y)"><svg class="icon"><use href="#i-redo"/></svg>Повторить</button>
+    <button id="resetViewBtn" title="Сбросить масштаб и позицию"><svg class="icon"><use href="#i-view"/></svg>Вид</button>
     <span id="zoomLabel" aria-live="polite">100%</span>
-    <button id="cursorBtn" title="Показывать мой курсор другому участнику">👁 Курсор</button>
-    <button id="findBtn" title="Перенестись к курсору другого участника">🎯 К курсору</button>
-    <button id="saveBtn" title="Сохранить доску в PNG (всё нарисованное)">💾 Сохранить</button>
+    <button id="cursorBtn" title="Показывать мой курсор другому участнику"><svg class="icon"><use href="#i-eye"/></svg>Курсор</button>
+    <button id="saveBtn" title="Сохранить доску в PNG (всё нарисованное)"><svg class="icon"><use href="#i-save"/></svg>Сохранить</button>
     <button id="clearBtn" title="Очистить доску">Очистить</button>
     <input type="file" id="imageInput" accept="image/*" style="display:none" />
-    <div class="room-info">Комната: <b id="roomLabel"></b> · участников: <span id="peerCount">1</span></div>
-    <button id="exitBtn" title="Выйти из комнаты">Выйти</button>
+    <div class="room-info"><span class="room-caption">Комната:</span> <b id="roomLabel"></b><span class="room-separator">·</span><span class="room-status"><span class="online-dot"></span><span id="peerCount">1</span> онлайн</span></div>
+    <button id="exitBtn" title="Выйти из комнаты"><svg class="icon"><use href="#i-exit"/></svg>Выйти</button>
   </div>
 
   <!-- Контекстное меню текста: показывается только при работе с текстом -->
