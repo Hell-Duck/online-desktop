@@ -6,7 +6,9 @@
   <title>Онлайн-доска</title>
   <style>
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: system-ui, sans-serif; background: #f0f2f5; }
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: #eef2f7; color: #172033; }
+    button, input, select { font: inherit; }
+    button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid rgba(37,99,235,.28); outline-offset: 2px; }
 
     /* ---- Экран входа ---- */
     #lobby {
@@ -32,16 +34,18 @@
     /* ---- Доска ---- */
     #toolbar {
       display: none; position: fixed; top: 0; left: 0; right: 0; height: 52px;
-      background: #fff; border-bottom: 1px solid #e5e7eb; align-items: center;
-      gap: 6px; padding: 0 12px; z-index: 10;
+      background: rgba(255,255,255,.97); border-bottom: 1px solid #dfe5ee; align-items: center;
+      gap: 6px; padding: 0 12px; z-index: 10; box-shadow: 0 2px 12px rgba(30,41,59,.07);
+      overflow-x: auto; white-space: nowrap;
     }
     #toolbar button {
       border: 1px solid #d0d4db; background: #fff; border-radius: 8px; padding: 6px 10px;
-      cursor: pointer; font-size: 14px;
+      cursor: pointer; font-size: 13px; transition: background .15s, border-color .15s, transform .15s;
     }
+    #toolbar button:hover { background: #f1f5f9; border-color: #aeb9ca; }
+    #toolbar button:active { transform: translateY(1px); }
     #toolbar button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
     #toolbar .sep { width: 1px; height: 28px; background: #e5e7eb; margin: 0 4px; }
-    #toolbar input[type=color] { width: 34px; height: 34px; border: none; background: none; cursor: pointer; }
     #toolbar select { border: 1px solid #d0d4db; background: #fff; border-radius: 8px; padding: 6px 8px; font-size: 14px; cursor: pointer; }
     #thicknessWrap { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #6b7280; }
     #thicknessWrap input[type=range] { width: 90px; cursor: pointer; }
@@ -75,6 +79,25 @@
       cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center;
     }
     #sidebar button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+    #sidebar button:hover { background: #eff6ff; border-color: #93b4f4; }
+
+    /* Постоянная палитра */
+    #colorPalette {
+      display: none; position: fixed; right: 18px; bottom: 18px; z-index: 25;
+      align-items: center; gap: 7px; padding: 9px 11px; border: 1px solid #d9e1ec;
+      border-radius: 16px; background: rgba(255,255,255,.96); box-shadow: 0 8px 28px rgba(30,41,59,.16);
+    }
+    .color-swatch {
+      width: 26px; height: 26px; padding: 0; border-radius: 50%; cursor: pointer;
+      border: 2px solid #fff; box-shadow: 0 0 0 1px #cbd5e1; transition: transform .15s, box-shadow .15s;
+    }
+    .color-swatch:hover { transform: scale(1.12); }
+    .color-swatch.active { box-shadow: 0 0 0 3px #2563eb; }
+    #customColor {
+      width: 32px; height: 32px; padding: 2px; border: 1px solid #cbd5e1;
+      border-radius: 9px; background: #fff; cursor: pointer;
+    }
+    #zoomLabel { min-width: 44px; text-align: center; font-size: 12px; font-weight: 700; color: #475569; }
 
     /* Курсоры других участников */
     #cursorLayer { display: none; position: fixed; top: 52px; left: 52px; right: 0; bottom: 0; pointer-events: none; overflow: hidden; z-index: 30; }
@@ -113,14 +136,16 @@
       <option value="grid">Клетка</option>
     </select>
     <div class="sep"></div>
-    <input type="color" id="color" value="#222222" title="Цвет" />
     <label id="thicknessWrap" title="Толщина (карандаш / стёрки / фигуры)">
       <input type="range" id="thickness" min="1" max="40" value="3" />
       <span id="thicknessVal">3</span>
     </label>
     <button id="imageBtn" title="Вставить картинку">🖼 Картинка</button>
     <button id="deleteBtn" title="Удалить выбранное">🗑</button>
+    <button id="undoBtn" title="Отменить последнее общее действие (Ctrl+Z)">↶ Отменить</button>
+    <button id="redoBtn" title="Повторить отменённое действие (Ctrl+Y)">↷ Повторить</button>
     <button id="resetViewBtn" title="Сбросить масштаб и позицию">⤢ Вид</button>
+    <span id="zoomLabel" aria-live="polite">100%</span>
     <button id="cursorBtn" title="Показывать мой курсор другому участнику">👁 Курсор</button>
     <button id="findBtn" title="Перенестись к курсору другого участника">🎯 К курсору</button>
     <button id="saveBtn" title="Сохранить доску в PNG (всё нарисованное)">💾 Сохранить</button>
@@ -138,12 +163,27 @@
     <button id="underlineBtn" class="fmt" title="Подчёркнутый" style="text-decoration:underline">Ч</button>
   </div>
 
+  <div id="colorPalette" aria-label="Палитра цветов">
+    <button class="color-swatch" data-color="#111827" aria-label="Графитовый" style="background:#111827"></button>
+    <button class="color-swatch" data-color="#ffffff" aria-label="Белый" style="background:#ffffff"></button>
+    <button class="color-swatch" data-color="#ef4444" aria-label="Красный" style="background:#ef4444"></button>
+    <button class="color-swatch" data-color="#f97316" aria-label="Оранжевый" style="background:#f97316"></button>
+    <button class="color-swatch" data-color="#eab308" aria-label="Жёлтый" style="background:#eab308"></button>
+    <button class="color-swatch" data-color="#22c55e" aria-label="Зелёный" style="background:#22c55e"></button>
+    <button class="color-swatch" data-color="#06b6d4" aria-label="Бирюзовый" style="background:#06b6d4"></button>
+    <button class="color-swatch" data-color="#2563eb" aria-label="Синий" style="background:#2563eb"></button>
+    <button class="color-swatch" data-color="#7c3aed" aria-label="Фиолетовый" style="background:#7c3aed"></button>
+    <button class="color-swatch" data-color="#ec4899" aria-label="Розовый" style="background:#ec4899"></button>
+    <input type="color" id="customColor" value="#111827" aria-label="Произвольный цвет" title="Выбрать любой цвет" />
+  </div>
+
   <canvas id="board"></canvas>
   <div id="cursorLayer"></div><!-- курсоры других участников -->
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.0/fabric.min.js"></script>
   <script src="/fabric-eraser.js"></script><!-- модуль пиксельного ластика (нет в основной сборке) -->
   <script src="/socket.io/socket.io.js"></script>
+  <script src="/board-utils.js"></script>
   <script src="/client.js"></script>
 </body>
 </html>
