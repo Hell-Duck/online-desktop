@@ -39,19 +39,31 @@ function start(room) {
   lobby.style.display = 'none';
   toolbar.style.display = 'flex';
   document.getElementById('sidebar').style.display = 'flex';
+  document.getElementById('colorPalette').style.display = 'flex';
   document.getElementById('roomLabel').textContent = room;
 
   const socket = io();
-  socket.emit('join', room);
 
   const canvasEl = document.getElementById('board');
   const canvas = new fabric.Canvas('board', { backgroundColor: '#ffffff' });
   window.boardCanvas = canvas; // ссылка для отладки/тестов
 
+  let hasSizedCanvas = false;
   function resize() {
+    const preservedView = hasSizedCanvas
+      ? BoardUtils.viewFromTransform(canvas.viewportTransform, canvas.getWidth(), canvas.getHeight())
+      : null;
     canvas.setWidth(window.innerWidth - SIDEBAR_W);
     canvas.setHeight(window.innerHeight - 52);
+    if (preservedView) {
+      canvas.setViewportTransform(BoardUtils.transformFromView(
+        preservedView,
+        canvas.getWidth(),
+        canvas.getHeight(),
+      ));
+    }
     canvas.calcOffset();
+    hasSizedCanvas = true;
   }
   // canvas-обёртка: ниже тулбара и правее боковой панели
   canvasEl.parentElement.style.marginTop = '52px';
@@ -61,7 +73,7 @@ function start(room) {
 
   let applyingRemote = false; // подавляет повторную трансляцию при применении чужих изменений
   let currentTool = 'select';
-  let currentColor = document.getElementById('color').value;
+  let currentColor = document.getElementById('customColor').value;
   let currentSheet = 'white'; // вид листа: white | ruled | grid
   const widths = { pen: 3, eraser: 20, shape: 2 }; // толщина по категориям инструментов
   let internalClipboard = null; // скопированные объекты доски (Ctrl+C/Ctrl+V)
@@ -75,9 +87,16 @@ function start(room) {
 
   /* --- Синхронизация и ОБЩАЯ история (единый стек на сервере) --- */
   const serialize = (obj) => obj.toObject();
-  const stateCache = {};       // id -> последнее известное состояние объекта (для before при изменении)
-  const byId = (id) => canvas.getObjects().find((o) => o.id === id);
-  const cacheObj = (obj) => { if (obj && obj.id) stateCache[obj.id] = serialize(obj); };
+  const stateCache = Object.create(null); // id -> последнее известное состояние объекта
+  const objectIndex = BoardUtils.createObjectIndex();
+  const byId = (id) => objectIndex.get(id);
+  const cacheObj = (obj, json = null) => {
+    if (!obj?.id) return null;
+    const snapshot = json || serialize(obj);
+    stateCache[obj.id] = snapshot;
+    objectIndex.set(obj);
+    return snapshot;
+  };
 
   // applyingRemote через счётчик — корректно при нескольких асинхронных enliven подряд (batch/clear)
   let remoteDepth = 0;
@@ -86,28 +105,70 @@ function start(room) {
 
   // Отправить операцию: сервер запишет её в общую историю и применит у остальных участников
   const sendOp = (op) => socket.emit('op', op);
+  const textBatcher = BoardUtils.createTextBatcher(sendOp, 150);
+  const suppressNextTextModified = new Set();
+  const scheduleRender = BoardUtils.createRenderScheduler(() => canvas.requestRenderAll());
+
+  function currentView() {
+    return BoardUtils.viewFromTransform(canvas.viewportTransform, canvas.getWidth(), canvas.getHeight());
+  }
+
+  function updateZoomLabel(zoom) {
+    const label = document.getElementById('zoomLabel');
+    if (label) label.textContent = Math.round(zoom * 100) + '%';
+  }
+
+  const sendView = BoardUtils.createTrailingThrottle((view) => socket.emit('view:set', view), 50);
+
+  function publishView() {
+    const view = currentView();
+    updateZoomLabel(view.zoom);
+    sendView(view);
+  }
+
+  const acceptRemoteView = BoardUtils.createRevisionGate((view) => {
+    canvas.setViewportTransform(BoardUtils.transformFromView(
+      view,
+      canvas.getWidth(),
+      canvas.getHeight(),
+    ));
+    updateZoomLabel(view.zoom);
+    scheduleRender();
+    renderCursors();
+  });
+  socket.on('view:set', acceptRemoteView);
 
   // --- Локальные изменения превращаем в операции для общей истории ---
   canvas.on('object:added', (e) => {
     const obj = e.target;
     if (!obj.id) obj.id = uid();
     if (applyingRemote) return;
-    cacheObj(obj);
-    sendOp({ kind: 'add', obj: serialize(obj) });
+    const json = serialize(obj);
+    cacheObj(obj, json);
+    sendOp({ kind: 'add', obj: json });
   });
   canvas.on('object:modified', (e) => {
     if (applyingRemote) return;
     const obj = e.target;
+    if (suppressNextTextModified.delete(obj.id)) return;
     const before = stateCache[obj.id];
-    cacheObj(obj);
-    sendOp({ kind: 'modify', before, after: serialize(obj) });
+    const after = serialize(obj);
+    cacheObj(obj, after);
+    sendOp({ kind: 'modify', before, after });
   });
   canvas.on('text:changed', (e) => {
     if (applyingRemote) return;
     const obj = e.target;
     const before = stateCache[obj.id];
-    cacheObj(obj);
-    sendOp({ kind: 'modify', before, after: serialize(obj) });
+    const after = serialize(obj);
+    cacheObj(obj, after);
+    textBatcher.change(obj.id, before, after);
+  });
+  canvas.on('text:editing:exited', (e) => {
+    const id = e.target?.id;
+    if (!id || !textBatcher.flush(id)) return;
+    suppressNextTextModified.add(id);
+    setTimeout(() => suppressNextTextModified.delete(id), 0);
   });
   canvas.on('object:removed', (e) => {
     if (applyingRemote) return;
@@ -115,6 +176,7 @@ function start(room) {
       const obj = stateCache[e.target.id] || serialize(e.target);
       sendOp({ kind: 'remove', obj });
       delete stateCache[e.target.id];
+      objectIndex.delete(e.target.id);
     }
   });
   // Ластик стёр части объектов -> одна операция batch (один откат вернёт весь штрих)
@@ -124,8 +186,9 @@ function start(room) {
     e.targets.forEach((obj) => {
       if (!obj.id) return;
       const before = stateCache[obj.id];
-      cacheObj(obj);
-      items.push({ before, after: serialize(obj) });
+      const after = serialize(obj);
+      cacheObj(obj, after);
+      items.push({ before, after });
     });
     if (items.length) sendOp({ kind: 'batch', items });
   });
@@ -134,14 +197,16 @@ function start(room) {
   function upsertLocal(json) {
     beginRemote();
     const ex = byId(json.id);
-    if (ex) canvas.remove(ex);
+    if (ex) {
+      objectIndex.delete(json.id);
+    }
     fabric.util.enlivenObjects([json], ([o]) => {
       o.id = json.id;
       o.erasable = !(currentTool === 'eraser-soft' && o.type === 'image'); // защита картинок в мягком режиме
       o.selectable = currentTool === 'select';
-      canvas.add(o);
-      cacheObj(o);
-      canvas.requestRenderAll();
+      BoardUtils.replaceCanvasObjectPreservingStack(canvas, ex, o);
+      cacheObj(o, json);
+      scheduleRender();
       endRemote();
     });
   }
@@ -150,11 +215,14 @@ function start(room) {
     const o = byId(id);
     if (o) canvas.remove(o);
     delete stateCache[id];
+    objectIndex.delete(id);
     endRemote();
   }
   function clearLocal() {
     beginRemote();
     canvas.clear();
+    objectIndex.clear();
+    Object.keys(stateCache).forEach((id) => delete stateCache[id]);
     applySheet(currentSheet);
     canvas.renderAll();
     endRemote();
@@ -174,7 +242,7 @@ function start(room) {
       else (op.objs || []).forEach((j) => upsertLocal(j));
     }
     canvas.discardActiveObject();
-    canvas.requestRenderAll();
+    scheduleRender();
   }
   socket.on('op:apply', ({ op, dir }) => applyOp(op, dir));
 
@@ -197,8 +265,9 @@ function start(room) {
       if (applyFn(o) === false) return; // объект не подходит — пропустить
       changed = true;
       o.setCoords();
-      cacheObj(o);
-      sendOp({ kind: 'modify', before, after: serialize(o) });
+      const after = serialize(o);
+      cacheObj(o, after);
+      sendOp({ kind: 'modify', before, after });
     });
     if (wasSelection) canvas.setActiveObject(new fabric.ActiveSelection(targets, { canvas }));
     canvas.requestRenderAll();
@@ -212,6 +281,9 @@ function start(room) {
   socket.on('load-state', (state) => {
     beginRemote();
     canvas.loadFromJSON(state.objects, () => {
+      objectIndex.rebuild(canvas.getObjects());
+      Object.keys(stateCache).forEach((id) => delete stateCache[id]);
+      canvas.getObjects().forEach((obj) => cacheObj(obj));
       if (state.sheet) applySheet(state.sheet);
       canvas.renderAll();
       endRemote();
@@ -224,6 +296,7 @@ function start(room) {
   /* ---------- Инструменты ---------- */
   // Кисти: карандаш и пиксельный ластик (EraserBrush стирает части объектов, а не объект целиком)
   const penBrush = new fabric.PencilBrush(canvas);
+  penBrush.decimate = 1.5;
   const eraserBrush = fabric.EraserBrush ? new fabric.EraserBrush(canvas) : null;
   if (!eraserBrush) console.warn('EraserBrush недоступен в этой сборке Fabric.js');
 
@@ -329,9 +402,10 @@ function start(room) {
     else { o.set(prop, value); clearCharStyleProp(o, prop); }
     o.initDimensions();
     o.setCoords();
-    canvas.requestRenderAll();
-    cacheObj(o);
-    sendOp({ kind: 'modify', before, after: serialize(o) });
+    scheduleRender();
+    const after = serialize(o);
+    cacheObj(o, after);
+    sendOp({ kind: 'modify', before, after });
     updateTextMenu();
   }
   // переключить свойство (Ж/К/Ч): кнопки сохраняют выделение -> используем только живой диапазон
@@ -360,7 +434,7 @@ function start(room) {
 
   // «Размер» и выбор цвета забирают фокус у текста — запоминаем диапазон по mousedown
   document.getElementById('fontSize').addEventListener('mousedown', captureRange);
-  document.getElementById('color').addEventListener('mousedown', captureRange);
+  document.getElementById('colorPalette').addEventListener('mousedown', captureRange);
   document.getElementById('fontSize').addEventListener('input', (e) => {
     const v = parseInt(e.target.value, 10);
     const o = canvas.getActiveObject();
@@ -381,8 +455,12 @@ function start(room) {
   ['text:selection:changed', 'text:editing:entered', 'text:editing:exited'].forEach((ev) => canvas.on(ev, updateTextMenu));
   toolButtons.forEach((b) => (b.onclick = () => setTool(b.dataset.tool)));
 
-  document.getElementById('color').addEventListener('input', (e) => {
-    currentColor = e.target.value;
+  function applyColor(color) {
+    currentColor = color;
+    document.getElementById('customColor').value = color;
+    document.querySelectorAll('.color-swatch').forEach((swatch) => {
+      swatch.classList.toggle('active', swatch.dataset.color.toLowerCase() === color.toLowerCase());
+    });
     if (canvas.isDrawingMode) canvas.freeDrawingBrush.color = currentColor;
     const active = canvas.getActiveObject();
     if (!active) return;
@@ -391,9 +469,14 @@ function start(room) {
     } else {
       modifySelected((o) => { if (o.type === 'image') return false; o.set('stroke', currentColor); });
     }
+  }
+  document.querySelectorAll('.color-swatch').forEach((swatch) => {
+    swatch.onclick = () => applyColor(swatch.dataset.color);
   });
+  document.getElementById('customColor').addEventListener('input', (e) => applyColor(e.target.value));
+  applyColor(currentColor);
 
-  /* --- Навигация: перемещение полотна и масштаб (локально, не синхронизируется) --- */
+  /* --- Навигация: общий для комнаты масштаб и положение полотна --- */
   let isPanning = false, lastPosX = 0, lastPosY = 0, spaceDown = false;
   const isPanMode = () => currentTool === 'pan' || spaceDown;
 
@@ -402,6 +485,7 @@ function start(room) {
     let zoom = canvas.getZoom() * Math.pow(0.999, opt.e.deltaY);
     zoom = Math.min(5, Math.max(0.15, zoom)); // ограничиваем масштаб
     canvas.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, zoom);
+    publishView();
     opt.e.preventDefault();
     opt.e.stopPropagation();
     renderCursors(); // пересчитать положение чужих курсоров под новый масштаб
@@ -423,9 +507,15 @@ function start(room) {
 
   // Сброс вида: масштаб 1, позиция в начало
   document.getElementById('resetViewBtn').onclick = () => {
-    canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
-    canvas.requestRenderAll();
+    canvas.setViewportTransform(BoardUtils.transformFromView(
+      { centerX: 0, centerY: 0, zoom: 1 },
+      canvas.getWidth(),
+      canvas.getHeight(),
+    ));
+    scheduleRender();
     renderCursors();
+    publishView();
+    sendView.flush();
   };
 
   /* --- Рисование фигур мышью --- */
@@ -482,6 +572,7 @@ function start(room) {
       lastPosY = opt.e.clientY;
       canvas.requestRenderAll();
       renderCursors(); // курсоры других смещаются вместе с полотном
+      publishView();
       return;
     }
     if (!draft) return;
@@ -501,12 +592,14 @@ function start(room) {
       isPanning = false;
       canvas.selection = currentTool === 'select';
       canvas.setCursor(isPanMode() ? 'grab' : 'default');
+      sendView.flush();
       return;
     }
     if (!draft) return;
     draft.setCoords();
-    cacheObj(draft);
-    sendOp({ kind: 'add', obj: serialize(draft) }); // готовая фигура -> операция add
+    const json = serialize(draft);
+    cacheObj(draft, json);
+    sendOp({ kind: 'add', obj: json }); // готовая фигура -> операция add
     draft = null;
     setTool('select');
   });
@@ -529,7 +622,30 @@ function start(room) {
   function readFileAsImage(file, point) {
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => addImage(ev.target.result, point);
+    reader.onerror = () => alert('Не удалось прочитать изображение.');
+    reader.onload = (ev) => {
+      const originalDataURL = ev.target.result;
+      const source = new Image();
+      source.onerror = () => alert('Не удалось открыть изображение. Проверьте формат файла.');
+      source.onload = () => {
+        const fitted = BoardUtils.fitWithin(source.naturalWidth, source.naturalHeight, 2048);
+        if (fitted.scale === 1) {
+          addImage(originalDataURL, point);
+          return;
+        }
+        const resized = document.createElement('canvas');
+        resized.width = fitted.width;
+        resized.height = fitted.height;
+        const context = resized.getContext('2d');
+        context.drawImage(source, 0, 0, fitted.width, fitted.height);
+        const keepsTransparency = file.type === 'image/png';
+        const dataURL = keepsTransparency
+          ? resized.toDataURL('image/png')
+          : resized.toDataURL('image/jpeg', 0.88);
+        addImage(dataURL, point);
+      };
+      source.src = originalDataURL;
+    };
     reader.readAsDataURL(file);
   }
 
@@ -578,8 +694,9 @@ function start(room) {
         endRemote();
         kids.forEach((o) => {
           o.setCoords();
-          cacheObj(o);
-          sendOp({ kind: 'add', obj: serialize(o) }); // теперь координаты верные
+          const json = serialize(o);
+          cacheObj(o, json);
+          sendOp({ kind: 'add', obj: json }); // теперь координаты верные
         });
         canvas.setActiveObject(new fabric.ActiveSelection(kids, { canvas })); // вернём групповое выделение
       } else {
@@ -623,7 +740,16 @@ function start(room) {
     canvas.discardActiveObject();
     canvas.requestRenderAll();
   }
-  document.getElementById('deleteBtn').onclick = deleteActive;
+  function requestUndo() {
+    textBatcher.flushAll();
+    socket.emit('undo');
+  }
+  function requestRedo() {
+    textBatcher.flushAll();
+    socket.emit('redo');
+  }
+  document.getElementById('undoBtn').onclick = requestUndo;
+  document.getElementById('redoBtn').onclick = requestRedo;
   window.addEventListener('keydown', (e) => {
     if (isTypingInField()) return; // печатаем в поле тулбара — не трогаем доску
     if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -635,10 +761,10 @@ function start(room) {
     // Ctrl+Z — отмена; Ctrl+Shift+Z или Ctrl+Y — повтор. Сравниваем по e.code (любая раскладка).
     if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ' && !e.shiftKey) {
       e.preventDefault();
-      socket.emit('undo'); // отмена в общей истории на сервере
+      requestUndo();
     } else if ((e.ctrlKey || e.metaKey) && (e.code === 'KeyY' || (e.code === 'KeyZ' && e.shiftKey))) {
       e.preventDefault();
-      socket.emit('redo'); // повтор
+      requestRedo();
     }
   });
 
@@ -652,11 +778,14 @@ function start(room) {
     e.preventDefault();
   });
   document.getElementById('clearBtn').onclick = () => {
+    textBatcher.flushAll();
     const objs = canvas.getObjects().map((o) => serialize(o));
     if (!objs.length) return;
     if (!confirm('Очистить доску у всех участников?')) return;
     beginRemote();                  // молча убираем объекты, чтобы не сыпать remove-операциями
     canvas.clear();
+    objectIndex.clear();
+    Object.keys(stateCache).forEach((id) => delete stateCache[id]);
     applySheet(currentSheet);       // объекты убираем, вид листа сохраняем
     canvas.renderAll();
     endRemote();
@@ -665,6 +794,7 @@ function start(room) {
 
   // Защита от случайного закрытия/перезагрузки: встроенный диалог браузера, если на доске что-то есть
   window.addEventListener('beforeunload', (e) => {
+    textBatcher.flushAll();
     if (!leaving && canvas.getObjects().length > 0) {
       e.preventDefault();
       e.returnValue = ''; // современные браузеры показывают свой стандартный текст
@@ -675,6 +805,7 @@ function start(room) {
   document.getElementById('exitBtn').onclick = () => {
     if (!confirm('Выйти из комнаты? Несохранённая доска будет потеряна.')) return;
     leaving = true;               // осознанный выход — без двойного предупреждения beforeunload
+    textBatcher.flushAll();
     socket.disconnect();          // второй участник увидит уменьшение числа участников
     window.location = location.pathname; // перезагрузка на лобби — полностью сбрасывает состояние
   };
@@ -759,7 +890,6 @@ function start(room) {
 
   /* --- Курсор для другого участника --- */
   let sharingCursor = false;
-  let lastCursorSent = 0;
   const remoteCursors = {}; // from -> { x, y, visible, el }
   const cursorLayer = document.getElementById('cursorLayer');
   cursorLayer.style.display = 'block';
@@ -816,38 +946,29 @@ function start(room) {
   });
 
   const sendCursor = (x, y, visible) => socket.emit('cursor', visible ? { x, y, visible: true } : { visible: false });
+  const sendCursorPosition = BoardUtils.createTrailingThrottle((x, y) => sendCursor(x, y, true), 40);
+
+  function hideSharedCursor() {
+    sendCursorPosition.cancel();
+    sendCursor(0, 0, false);
+  }
 
   window.addEventListener('mousemove', (e) => {
     if (!sharingCursor) return;
-    const now = Date.now();
-    if (now - lastCursorSent < 40) return; // не чаще ~25 раз/сек
     const p = clientToScene(e.clientX, e.clientY);
     if (!p) return; // курсор над тулбаром/вне доски — не обновляем
-    lastCursorSent = now;
-    sendCursor(p.x, p.y, true);
+    sendCursorPosition(p.x, p.y);
   });
   // мышь ушла за пределы окна сайта или вкладка скрыта -> курсор у других исчезает
-  document.addEventListener('mouseleave', () => { if (sharingCursor) sendCursor(0, 0, false); });
-  document.addEventListener('visibilitychange', () => { if (sharingCursor && document.hidden) sendCursor(0, 0, false); });
+  document.addEventListener('mouseleave', () => { if (sharingCursor) hideSharedCursor(); });
+  document.addEventListener('visibilitychange', () => { if (sharingCursor && document.hidden) hideSharedCursor(); });
 
   document.getElementById('cursorBtn').onclick = () => {
     sharingCursor = !sharingCursor;
     document.getElementById('cursorBtn').classList.toggle('active', sharingCursor);
-    if (!sharingCursor) sendCursor(0, 0, false); // выключили показ — спрятать у других
+    if (!sharingCursor) hideSharedCursor(); // выключили показ — спрятать у других
   };
-  document.getElementById('findBtn').onclick = () => {
-    const list = Object.keys(remoteCursors).map((k) => remoteCursors[k]).filter((c) => c.x != null);
-    const target = list.find((c) => c.visible) || list[0];
-    if (!target) { alert('Курсор другого участника не виден. Попросите его включить показ курсора (кнопка 👁 Курсор).'); return; }
-    const zoom = canvas.getZoom();
-    const vpt = canvas.viewportTransform.slice();
-    vpt[4] = canvas.getWidth() / 2 - zoom * target.x;
-    vpt[5] = canvas.getHeight() / 2 - zoom * target.y;
-    canvas.setViewportTransform(vpt);
-    canvas.requestRenderAll();
-    renderCursors();
-  };
-
   applySheet('white');
   setTool('select');
+  socket.emit('join', { room, initialView: currentView() });
 }

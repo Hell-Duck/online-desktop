@@ -5,44 +5,79 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Онлайн-доска</title>
   <style>
+    :root {
+      --accent: #16a66a;
+      --accent-strong: #0d8a56;
+      --accent-soft: #e6f8ef;
+      --secondary: #7257d9;
+      --secondary-soft: #f0edff;
+      --danger: #ef665d;
+      --ink: #20302a;
+      --muted: #708078;
+      --line: #dfe9e3;
+      --surface: rgba(255,255,255,.96);
+      --panel-shadow: 0 12px 34px rgba(34,74,55,.14);
+    }
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: system-ui, sans-serif; background: #f0f2f5; }
+    body { margin: 0; font-family: Inter, ui-rounded, system-ui, sans-serif; background: #f2f8f4; color: var(--ink); }
+    button, input, select { font: inherit; }
+    .icon { width: 18px; height: 18px; display: block; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+    button .icon { flex: 0 0 auto; }
+    button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid rgba(22,166,106,.28); outline-offset: 2px; }
 
     /* ---- Экран входа ---- */
     #lobby {
       position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-      background: #f0f2f5; z-index: 100;
+      background:
+        radial-gradient(circle at 18% 22%, rgba(22,166,106,.18), transparent 30%),
+        radial-gradient(circle at 82% 78%, rgba(114,87,217,.16), transparent 28%),
+        linear-gradient(145deg, #f6fcf8, #eff7f2); z-index: 100;
     }
     .card {
-      background: #fff; padding: 32px; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,.08);
-      width: 340px; text-align: center;
+      position: relative; overflow: hidden; background: rgba(255,255,255,.94); padding: 38px;
+      border: 1px solid rgba(255,255,255,.82); border-radius: 28px; box-shadow: 0 24px 70px rgba(34,74,55,.16);
+      width: min(390px, calc(100vw - 32px)); text-align: center; backdrop-filter: blur(16px);
     }
-    .card h1 { font-size: 20px; margin: 0 0 20px; }
+    .brand-mark {
+      width: 62px; height: 62px; margin: 0 auto 16px; display: grid; place-items: center;
+      border-radius: 20px; background: linear-gradient(145deg, var(--accent), #35c889); color: #fff;
+      font-size: 29px; font-weight: 800; box-shadow: 0 12px 28px rgba(22,166,106,.28); transform: rotate(-3deg);
+    }
+    .card h1 { font-size: 27px; letter-spacing: -.7px; margin: 0 0 8px; }
+    .card .subtitle { margin: 0 0 24px; color: var(--muted); font-size: 14px; line-height: 1.45; }
     .card input {
-      width: 100%; padding: 10px 12px; font-size: 15px; border: 1px solid #d0d4db;
-      border-radius: 8px; margin-bottom: 12px;
+      width: 100%; padding: 13px 15px; font-size: 15px; border: 1px solid var(--line);
+      border-radius: 14px; margin-bottom: 12px; background: #f9fcfa; color: var(--ink);
+      transition: border-color .18s, box-shadow .18s, background .18s;
     }
+    .card input:focus { border-color: var(--accent); background: #fff; box-shadow: 0 0 0 4px var(--accent-soft); outline: none; }
     .card button {
-      width: 100%; padding: 10px; font-size: 15px; border: none; border-radius: 8px;
-      background: #2563eb; color: #fff; cursor: pointer; margin-bottom: 8px;
+      width: 100%; padding: 12px; font-size: 15px; font-weight: 700; border: none; border-radius: 14px;
+      background: var(--accent); color: #fff; cursor: pointer; margin-bottom: 9px;
+      box-shadow: 0 8px 18px rgba(22,166,106,.2); transition: transform .16s, box-shadow .16s, background .16s;
     }
-    .card button.secondary { background: #e5e7eb; color: #111; }
-    .card .hint { font-size: 13px; color: #6b7280; margin-top: 4px; }
+    .card button:hover { background: var(--accent-strong); transform: translateY(-1px); box-shadow: 0 11px 22px rgba(22,166,106,.25); }
+    .card button.secondary { background: var(--secondary-soft); color: var(--secondary); box-shadow: none; }
+    .card button.secondary:hover { background: #e6e0ff; }
+    .card .hint { font-size: 12px; color: var(--muted); margin-top: 9px; }
 
     /* ---- Доска ---- */
     #toolbar {
       display: none; position: fixed; top: 0; left: 0; right: 0; height: 52px;
-      background: #fff; border-bottom: 1px solid #e5e7eb; align-items: center;
-      gap: 6px; padding: 0 12px; z-index: 10;
+      background: var(--surface); border-bottom: 1px solid var(--line); align-items: center;
+      gap: 6px; padding: 0 12px; z-index: 10; box-shadow: 0 5px 24px rgba(34,74,55,.09);
+      overflow-x: auto; white-space: nowrap;
     }
     #toolbar button {
-      border: 1px solid #d0d4db; background: #fff; border-radius: 8px; padding: 6px 10px;
-      cursor: pointer; font-size: 14px;
+      border: 1px solid transparent; background: #f5f8f6; border-radius: 10px; padding: 7px 10px;
+      cursor: pointer; font-size: 13px; display: inline-flex; align-items: center; gap: 6px;
+      transition: background .15s, border-color .15s, transform .15s;
     }
-    #toolbar button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
-    #toolbar .sep { width: 1px; height: 28px; background: #e5e7eb; margin: 0 4px; }
-    #toolbar input[type=color] { width: 34px; height: 34px; border: none; background: none; cursor: pointer; }
-    #toolbar select { border: 1px solid #d0d4db; background: #fff; border-radius: 8px; padding: 6px 8px; font-size: 14px; cursor: pointer; }
+    #toolbar button:hover { background: var(--accent-soft); border-color: #a9dfc5; color: var(--accent-strong); }
+    #toolbar button:active { transform: translateY(1px); }
+    #toolbar button.active { background: var(--accent); color: #fff; border-color: var(--accent); box-shadow: 0 6px 14px rgba(22,166,106,.2); }
+    #toolbar .sep { width: 1px; height: 28px; background: var(--line); margin: 0 4px; }
+    #toolbar select { border: 1px solid var(--line); background: #fff; border-radius: 10px; padding: 7px 9px; font-size: 14px; cursor: pointer; }
     #thicknessWrap { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #6b7280; }
     #thicknessWrap input[type=range] { width: 90px; cursor: pointer; }
     #thicknessWrap span { width: 20px; text-align: right; color: #111; }
@@ -57,35 +92,93 @@
     #textToolbar label { display: flex; align-items: center; gap: 4px; color: #6b7280; }
     #textToolbar input[type=number] { width: 56px; padding: 4px 6px; border: 1px solid #d0d4db; border-radius: 6px; font-size: 14px; }
     #textToolbar button.fmt { width: 32px; height: 32px; border: 1px solid #d0d4db; background: #fff; border-radius: 6px; cursor: pointer; font-size: 15px; }
-    #textToolbar button.fmt.active { background: #2563eb; color: #fff; border-color: #2563eb; }
-    #toolbar .room-info { margin-left: auto; font-size: 13px; color: #6b7280; }
-    #toolbar .room-info b { color: #111; }
-    #exitBtn { margin-left: 10px; border-color: #ef4444; color: #ef4444; }
-    #exitBtn:hover { background: #ef4444; color: #fff; }
+    #textToolbar button.fmt.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    #toolbar .room-info { margin-left: auto; display: flex; align-items: center; gap: 7px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 11px; background: #f8fbf9; font-size: 12px; color: var(--muted); }
+    #toolbar .room-info b { color: var(--ink); max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
+    .room-status { display: inline-flex; align-items: center; gap: 5px; color: var(--accent-strong); font-weight: 750; }
+    .online-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    #exitBtn { margin-left: 10px; border-color: #ffd4d0 !important; color: var(--danger); background: #fff6f5 !important; }
+    #exitBtn:hover { background: var(--danger) !important; color: #fff; }
+    #clearBtn { color: #c84d46; }
     canvas { display: block; }
 
     /* Левая панель инструментов */
     #sidebar {
       display: none; position: fixed; top: 52px; left: 0; bottom: 0; width: 52px;
-      background: #fff; border-right: 1px solid #e5e7eb; flex-direction: column; align-items: center;
+      background: var(--surface); border-right: 1px solid var(--line); flex-direction: column; align-items: center;
       gap: 6px; padding: 8px 0; z-index: 10;
     }
     #sidebar button {
-      width: 40px; height: 40px; border: 1px solid #d0d4db; background: #fff; border-radius: 8px;
-      cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center;
+      width: 40px; height: 40px; border: 1px solid transparent; background: transparent; border-radius: 12px;
+      cursor: pointer; font-size: 17px; display: flex; align-items: center; justify-content: center;
+      transition: background .16s, color .16s, transform .16s, box-shadow .16s;
     }
-    #sidebar button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+    #sidebar button.active { background: var(--accent); color: #fff; border-color: var(--accent); box-shadow: 0 7px 16px rgba(22,166,106,.25); }
+    #sidebar button:hover { background: var(--accent-soft); color: var(--accent-strong); transform: translateY(-1px); }
+    #sidebar button.active:hover { background: var(--accent-strong); color: #fff; }
+
+    /* Постоянная палитра */
+    #colorPalette {
+      display: none; position: fixed; right: 18px; bottom: 18px; z-index: 25;
+      align-items: center; gap: 7px; padding: 9px 11px; border: 1px solid #d9e1ec;
+      border-radius: 18px; background: var(--surface); box-shadow: var(--panel-shadow); backdrop-filter: blur(14px);
+    }
+    .palette-label { padding: 0 4px 0 2px; font-size: 12px; font-weight: 750; color: var(--muted); }
+    .color-swatch {
+      width: 26px; height: 26px; padding: 0; border-radius: 50%; cursor: pointer;
+      border: 2px solid #fff; box-shadow: 0 0 0 1px #cbd5e1; transition: transform .15s, box-shadow .15s;
+    }
+    .color-swatch:hover { transform: scale(1.12); }
+    .color-swatch.active { box-shadow: 0 0 0 3px var(--accent); }
+    #customColor {
+      width: 32px; height: 32px; padding: 2px; border: 1px solid #cbd5e1;
+      border-radius: 9px; background: #fff; cursor: pointer;
+    }
+    #zoomLabel { min-width: 44px; text-align: center; font-size: 12px; font-weight: 700; color: #475569; }
 
     /* Курсоры других участников */
     #cursorLayer { display: none; position: fixed; top: 52px; left: 52px; right: 0; bottom: 0; pointer-events: none; overflow: hidden; z-index: 30; }
     .remote-cursor { position: absolute; transition: left .05s linear, top .05s linear; }
     .remote-cursor .cur-edge { display: none; }
+
+    @media (max-width: 760px) {
+      .card { padding: 30px 24px; border-radius: 24px; }
+      #toolbar { gap: 5px; padding: 0 8px; }
+      #toolbar button { padding: 7px 9px; }
+      #toolbar .room-info { margin-left: 4px; padding: 6px 8px; }
+      #toolbar .room-info .room-caption, #toolbar .room-info .room-separator { display: none; }
+      #colorPalette { right: 10px; bottom: 10px; max-width: calc(100vw - 72px); overflow-x: auto; padding: 8px; }
+      .palette-label { display: none; }
+      .color-swatch { width: 24px; height: 24px; flex: 0 0 auto; }
+    }
   </style>
 </head>
 <body>
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute;overflow:hidden">
+    <defs>
+      <symbol id="i-select" viewBox="0 0 24 24"><path d="M5 3l13 9-6 1.5L9 19z"/><path d="M12 13.5l4 6"/></symbol>
+      <symbol id="i-hand" viewBox="0 0 24 24"><path d="M7 11V6a2 2 0 014 0v4-6a2 2 0 014 0v6-4a2 2 0 014 0v5-2a2 2 0 014 0v5c0 4-3 7-7 7h-1c-3 0-5-1-7-4l-2-3a2 2 0 013-3l2 2"/></symbol>
+      <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20l4.5-1 10-10a2.1 2.1 0 00-3-3l-10 10z"/><path d="M14 7l3 3"/></symbol>
+      <symbol id="i-square" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/></symbol>
+      <symbol id="i-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></symbol>
+      <symbol id="i-line" viewBox="0 0 24 24"><path d="M5 19L19 5"/></symbol>
+      <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 6h14M12 6v13M8 19h8"/></symbol>
+      <symbol id="i-eraser" viewBox="0 0 24 24"><path d="M4 16l9-10a2 2 0 013 0l3 3a2 2 0 010 3l-7 8H8z"/><path d="M9 11l6 6M12 20h8"/></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-2.6 7.7-7 10-4.4-2.3-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></symbol>
+      <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="M4 17l5-5 4 4 2-2 5 4"/></symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 7l-4 4 4 4"/><path d="M5 11h8a6 6 0 016 6"/></symbol>
+      <symbol id="i-redo" viewBox="0 0 24 24"><path d="M15 7l4 4-4 4"/><path d="M19 11h-8a6 6 0 00-6 6"/></symbol>
+      <symbol id="i-view" viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/><circle cx="12" cy="12" r="3"/></symbol>
+      <symbol id="i-eye" viewBox="0 0 24 24"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6z"/><circle cx="12" cy="12" r="2.5"/></symbol>
+      <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></symbol>
+      <symbol id="i-exit" viewBox="0 0 24 24"><path d="M10 4H5v16h5M14 8l4 4-4 4M8 12h10"/></symbol>
+    </defs>
+  </svg>
   <div id="lobby">
     <div class="card">
+      <div class="brand-mark" aria-hidden="true">✦</div>
       <h1>Онлайн-доска</h1>
+      <p class="subtitle">Рисуйте, обсуждайте и двигайтесь по одной доске вместе</p>
       <input id="roomInput" placeholder="Код комнаты" />
       <button id="joinBtn">Войти в комнату</button>
       <button id="createBtn" class="secondary">Создать новую</button>
@@ -94,16 +187,16 @@
   </div>
 
   <!-- Левая панель инструментов рисования -->
-  <div id="sidebar">
-    <button data-tool="select" class="active" title="Выделение объектов">⬚</button>
-    <button data-tool="pan" title="Двигать полотно (или зажми пробел)">✋</button>
-    <button data-tool="pen" title="Карандаш">✏️</button>
-    <button data-tool="rect" title="Прямоугольник">▭</button>
-    <button data-tool="circle" title="Круг">◯</button>
-    <button data-tool="line" title="Линия">╱</button>
-    <button data-tool="text" title="Текст">T</button>
-    <button data-tool="eraser" title="Стёрка — стирает всё">🧽</button>
-    <button data-tool="eraser-soft" title="Стёрка — не трогает вставленные картинки">🧽🛡</button>
+  <div id="sidebar" class="tool-group drawing-tools">
+    <button data-tool="select" class="active" title="Выделение объектов"><svg class="icon"><use href="#i-select"/></svg></button>
+    <button data-tool="pan" title="Двигать полотно (или зажми пробел)"><svg class="icon"><use href="#i-hand"/></svg></button>
+    <button data-tool="pen" title="Карандаш"><svg class="icon"><use href="#i-pen"/></svg></button>
+    <button data-tool="rect" title="Прямоугольник"><svg class="icon"><use href="#i-square"/></svg></button>
+    <button data-tool="circle" title="Круг"><svg class="icon"><use href="#i-circle"/></svg></button>
+    <button data-tool="line" title="Линия"><svg class="icon"><use href="#i-line"/></svg></button>
+    <button data-tool="text" title="Текст"><svg class="icon"><use href="#i-text"/></svg></button>
+    <button data-tool="eraser" title="Стёрка — стирает всё"><svg class="icon"><use href="#i-eraser"/></svg></button>
+    <button data-tool="eraser-soft" title="Стёрка — не трогает вставленные картинки"><svg class="icon"><use href="#i-shield"/></svg></button>
   </div>
 
   <div id="toolbar">
@@ -113,21 +206,21 @@
       <option value="grid">Клетка</option>
     </select>
     <div class="sep"></div>
-    <input type="color" id="color" value="#222222" title="Цвет" />
     <label id="thicknessWrap" title="Толщина (карандаш / стёрки / фигуры)">
       <input type="range" id="thickness" min="1" max="40" value="3" />
       <span id="thicknessVal">3</span>
     </label>
-    <button id="imageBtn" title="Вставить картинку">🖼 Картинка</button>
-    <button id="deleteBtn" title="Удалить выбранное">🗑</button>
-    <button id="resetViewBtn" title="Сбросить масштаб и позицию">⤢ Вид</button>
-    <button id="cursorBtn" title="Показывать мой курсор другому участнику">👁 Курсор</button>
-    <button id="findBtn" title="Перенестись к курсору другого участника">🎯 К курсору</button>
-    <button id="saveBtn" title="Сохранить доску в PNG (всё нарисованное)">💾 Сохранить</button>
+    <button id="imageBtn" title="Вставить картинку"><svg class="icon"><use href="#i-image"/></svg>Картинка</button>
+    <button id="undoBtn" title="Отменить последнее общее действие (Ctrl+Z)"><svg class="icon"><use href="#i-undo"/></svg>Отменить</button>
+    <button id="redoBtn" title="Повторить отменённое действие (Ctrl+Y)"><svg class="icon"><use href="#i-redo"/></svg>Повторить</button>
+    <button id="resetViewBtn" title="Сбросить масштаб и позицию"><svg class="icon"><use href="#i-view"/></svg>Вид</button>
+    <span id="zoomLabel" aria-live="polite">100%</span>
+    <button id="cursorBtn" title="Показывать мой курсор другому участнику"><svg class="icon"><use href="#i-eye"/></svg>Курсор</button>
+    <button id="saveBtn" title="Сохранить доску в PNG (всё нарисованное)"><svg class="icon"><use href="#i-save"/></svg>Сохранить</button>
     <button id="clearBtn" title="Очистить доску">Очистить</button>
     <input type="file" id="imageInput" accept="image/*" style="display:none" />
-    <div class="room-info">Комната: <b id="roomLabel"></b> · участников: <span id="peerCount">1</span></div>
-    <button id="exitBtn" title="Выйти из комнаты">Выйти</button>
+    <div class="room-info"><span class="room-caption">Комната:</span> <b id="roomLabel"></b><span class="room-separator">·</span><span class="room-status"><span class="online-dot"></span><span id="peerCount">1</span> онлайн</span></div>
+    <button id="exitBtn" title="Выйти из комнаты"><svg class="icon"><use href="#i-exit"/></svg>Выйти</button>
   </div>
 
   <!-- Контекстное меню текста: показывается только при работе с текстом -->
@@ -138,12 +231,28 @@
     <button id="underlineBtn" class="fmt" title="Подчёркнутый" style="text-decoration:underline">Ч</button>
   </div>
 
+  <div id="colorPalette" aria-label="Палитра цветов">
+    <span class="palette-label">Цвет</span>
+    <button class="color-swatch" data-color="#111827" aria-label="Графитовый" style="background:#111827"></button>
+    <button class="color-swatch" data-color="#ffffff" aria-label="Белый" style="background:#ffffff"></button>
+    <button class="color-swatch" data-color="#ef4444" aria-label="Красный" style="background:#ef4444"></button>
+    <button class="color-swatch" data-color="#f97316" aria-label="Оранжевый" style="background:#f97316"></button>
+    <button class="color-swatch" data-color="#eab308" aria-label="Жёлтый" style="background:#eab308"></button>
+    <button class="color-swatch" data-color="#22c55e" aria-label="Зелёный" style="background:#22c55e"></button>
+    <button class="color-swatch" data-color="#06b6d4" aria-label="Бирюзовый" style="background:#06b6d4"></button>
+    <button class="color-swatch" data-color="#2563eb" aria-label="Синий" style="background:#2563eb"></button>
+    <button class="color-swatch" data-color="#7c3aed" aria-label="Фиолетовый" style="background:#7c3aed"></button>
+    <button class="color-swatch" data-color="#ec4899" aria-label="Розовый" style="background:#ec4899"></button>
+    <input type="color" id="customColor" value="#111827" aria-label="Произвольный цвет" title="Выбрать любой цвет" />
+  </div>
+
   <canvas id="board"></canvas>
   <div id="cursorLayer"></div><!-- курсоры других участников -->
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.0/fabric.min.js"></script>
   <script src="/fabric-eraser.js"></script><!-- модуль пиксельного ластика (нет в основной сборке) -->
   <script src="/socket.io/socket.io.js"></script>
+  <script src="/board-utils.js"></script>
   <script src="/client.js"></script>
 </body>
 </html>
