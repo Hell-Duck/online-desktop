@@ -198,14 +198,13 @@ function start(room) {
     beginRemote();
     const ex = byId(json.id);
     if (ex) {
-      canvas.remove(ex);
       objectIndex.delete(json.id);
     }
     fabric.util.enlivenObjects([json], ([o]) => {
       o.id = json.id;
       o.erasable = !(currentTool === 'eraser-soft' && o.type === 'image'); // защита картинок в мягком режиме
       o.selectable = currentTool === 'select';
-      canvas.add(o);
+      BoardUtils.replaceCanvasObjectPreservingStack(canvas, ex, o);
       cacheObj(o, json);
       scheduleRender();
       endRemote();

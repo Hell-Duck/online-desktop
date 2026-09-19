@@ -8,6 +8,7 @@ const {
   createTextBatcher,
   createTrailingThrottle,
   fitWithin,
+  replaceCanvasObjectPreservingStack,
   transformFromView,
   viewFromTransform,
 } = require('../public/board-utils');
@@ -168,4 +169,22 @@ test('fitWithin preserves ratio and never enlarges a small image', () => {
     height: 600,
     scale: 1,
   });
+});
+
+test('replacing a synchronized object preserves its canvas layer', () => {
+  const below = { id: 'circle' };
+  const image = { id: 'image' };
+  const above = { id: 'note' };
+  const replacement = { id: 'circle' };
+  const objects = [below, image, above];
+  const canvas = {
+    getObjects: () => objects,
+    remove(object) { objects.splice(objects.indexOf(object), 1); },
+    insertAt(object, index) { objects.splice(index, 0, object); },
+    add(object) { objects.push(object); },
+  };
+
+  replaceCanvasObjectPreservingStack(canvas, below, replacement);
+
+  assert.deepEqual(objects, [replacement, image, above]);
 });

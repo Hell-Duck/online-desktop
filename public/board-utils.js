@@ -151,6 +151,20 @@
     };
   }
 
+  function replaceCanvasObjectPreservingStack(canvas, existing, replacement) {
+    if (!existing) {
+      canvas.add(replacement);
+      return;
+    }
+    const stackIndex = canvas.getObjects().indexOf(existing);
+    canvas.remove(existing);
+    if (stackIndex >= 0 && typeof canvas.insertAt === 'function') {
+      canvas.insertAt(replacement, stackIndex, false);
+    } else {
+      canvas.add(replacement);
+    }
+  }
+
   return {
     createRenderScheduler,
     createRevisionGate,
@@ -158,6 +172,7 @@
     createTextBatcher,
     createTrailingThrottle,
     fitWithin,
+    replaceCanvasObjectPreservingStack,
     transformFromView,
     viewFromTransform,
   };
