@@ -87,6 +87,19 @@ function start(room) {
 
   /* --- Синхронизация и ОБЩАЯ история (единый стек на сервере) --- */
   const serialize = (obj) => obj.toObject();
+  const TEXT_FIELDS = [
+    'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'underline', 'linethrough',
+    'overline', 'fill', 'textAlign', 'lineHeight', 'charSpacing',
+  ];
+  const textSnapshot = (source) => {
+    const result = {
+      id: source?.id,
+      text: typeof source?.text === 'string' ? source.text : '',
+      styles: source?.styles || {},
+    };
+    TEXT_FIELDS.forEach((field) => { if (source?.[field] !== undefined) result[field] = source[field]; });
+    return result;
+  };
   const stateCache = Object.create(null); // id -> последнее известное состояние объекта
   const objectIndex = BoardUtils.createObjectIndex();
   const byId = (id) => objectIndex.get(id);
@@ -105,8 +118,14 @@ function start(room) {
 
   // Отправить операцию: сервер запишет её в общую историю и применит у остальных участников
   const sendOp = (op) => socket.emit('op', op);
-  const textBatcher = BoardUtils.createTextBatcher(sendOp, 150);
+  const textSync = BoardUtils.createTextSessionSync({
+    preview: (message) => socket.emit('text:preview', message),
+    commit: sendOp,
+  }, 100);
   const suppressNextTextModified = new Set();
+  const pendingTextSnapshots = new Map();
+  const remotePreviewOwners = new Map();
+  const objectGenerations = new Map();
   const scheduleRender = BoardUtils.createRenderScheduler(() => canvas.requestRenderAll());
 
   function currentView() {
@@ -159,20 +178,21 @@ function start(room) {
   canvas.on('text:changed', (e) => {
     if (applyingRemote) return;
     const obj = e.target;
-    const before = stateCache[obj.id];
-    const after = serialize(obj);
-    cacheObj(obj, after);
-    textBatcher.change(obj.id, before, after);
+    const before = textSnapshot(stateCache[obj.id]);
+    const after = textSnapshot(obj);
+    textSync.change(obj.id, before, after);
   });
   canvas.on('text:editing:exited', (e) => {
     const id = e.target?.id;
-    if (!id || !textBatcher.flush(id)) return;
+    if (!id || !textSync.finish(id)) return;
+    cacheObj(e.target);
     suppressNextTextModified.add(id);
     setTimeout(() => suppressNextTextModified.delete(id), 0);
   });
   canvas.on('object:removed', (e) => {
     if (applyingRemote) return;
     if (e.target && e.target.id) {
+      objectGenerations.set(e.target.id, (objectGenerations.get(e.target.id) || 0) + 1);
       const obj = stateCache[e.target.id] || serialize(e.target);
       sendOp({ kind: 'remove', obj });
       delete stateCache[e.target.id];
@@ -194,34 +214,66 @@ function start(room) {
   });
 
   /* --- Применение операций (чужие правки, undo, redo — всё от сервера) --- */
+  function updateTextLocal(json, authoritative = true) {
+    const obj = byId(json?.id);
+    if (!obj) {
+      if (json?.id) pendingTextSnapshots.set(json.id, { authoritative, json });
+      return false;
+    }
+    beginRemote();
+    BoardUtils.applyTextSnapshot(obj, json);
+    if (authoritative) cacheObj(obj);
+    scheduleRender();
+    endRemote();
+    return true;
+  }
+
   function upsertLocal(json) {
+    const generation = (objectGenerations.get(json.id) || 0) + 1;
+    objectGenerations.set(json.id, generation);
     beginRemote();
     const ex = byId(json.id);
     if (ex) {
       objectIndex.delete(json.id);
     }
     fabric.util.enlivenObjects([json], ([o]) => {
+      if (objectGenerations.get(json.id) !== generation) { endRemote(); return; }
       o.id = json.id;
       o.erasable = !(currentTool === 'eraser-soft' && o.type === 'image'); // защита картинок в мягком режиме
       o.selectable = currentTool === 'select';
       BoardUtils.replaceCanvasObjectPreservingStack(canvas, ex, o);
       cacheObj(o, json);
+      const pendingText = pendingTextSnapshots.get(json.id);
+      if (pendingText) {
+        pendingTextSnapshots.delete(json.id);
+        updateTextLocal(pendingText.json, pendingText.authoritative);
+      }
       scheduleRender();
       endRemote();
     });
   }
   function removeLocal(id) {
+    textSync.cancel(id);
+    objectGenerations.set(id, (objectGenerations.get(id) || 0) + 1);
     beginRemote();
     const o = byId(id);
     if (o) canvas.remove(o);
     delete stateCache[id];
     objectIndex.delete(id);
+    pendingTextSnapshots.delete(id);
+    remotePreviewOwners.delete(id);
     endRemote();
   }
   function clearLocal() {
+    textSync.cancelAll();
+    for (const id of objectGenerations.keys()) {
+      objectGenerations.set(id, objectGenerations.get(id) + 1);
+    }
     beginRemote();
     canvas.clear();
     objectIndex.clear();
+    pendingTextSnapshots.clear();
+    remotePreviewOwners.clear();
     Object.keys(stateCache).forEach((id) => delete stateCache[id]);
     applySheet(currentSheet);
     canvas.renderAll();
@@ -235,6 +287,13 @@ function start(room) {
     } else if (op.kind === 'modify') {
       const json = dir === 'forward' ? op.after : op.before;
       if (json) upsertLocal(json);
+    } else if (op.kind === 'text') {
+      const json = dir === 'forward' ? op.after : op.before;
+      if (json) {
+        textSync.cancel(json.id);
+        remotePreviewOwners.delete(json.id);
+        updateTextLocal(json);
+      }
     } else if (op.kind === 'batch') {
       op.items.forEach((i) => { const j = dir === 'forward' ? i.after : i.before; if (j) upsertLocal(j); });
     } else if (op.kind === 'clear') {
@@ -245,6 +304,18 @@ function start(room) {
     scheduleRender();
   }
   socket.on('op:apply', ({ op, dir }) => applyOp(op, dir));
+  socket.on('text:preview', BoardUtils.createTextPreviewGate((message) => {
+    if (textSync.has(message.id)) return;
+    remotePreviewOwners.set(message.id, message.from);
+    updateTextLocal({ ...message.snapshot, id: message.id }, false);
+  }));
+  socket.on('text:preview:end', ({ from } = {}) => {
+    for (const [id, owner] of remotePreviewOwners) {
+      if (owner !== from) continue;
+      remotePreviewOwners.delete(id);
+      if (stateCache[id]) updateTextLocal(stateCache[id], false);
+    }
+  });
 
   // Изменить выделенные объекты (applyFn для каждого) и отправить операции.
   // Для группы фиксируем абсолютные координаты, чтобы не разослать относительные (как при вставке).
@@ -276,7 +347,10 @@ function start(room) {
 
   // Синхронизация состояния при входе нового участника (объекты + вид листа)
   socket.on('request-state', (newId) => {
-    socket.emit('send-state', { to: newId, state: { objects: canvas.toJSON(['id']), sheet: currentSheet } });
+    socket.emit('send-state', {
+      to: newId,
+      state: { objects: { objects: Object.values(stateCache) }, sheet: currentSheet },
+    });
   });
   socket.on('load-state', (state) => {
     beginRemote();
@@ -404,8 +478,12 @@ function start(room) {
     o.setCoords();
     scheduleRender();
     const after = serialize(o);
-    cacheObj(o, after);
-    sendOp({ kind: 'modify', before, after });
+    if (o.isEditing && textSync.has(o.id)) {
+      textSync.change(o.id, textSnapshot(before), textSnapshot(after));
+    } else {
+      cacheObj(o, after);
+      sendOp({ kind: 'modify', before, after });
+    }
     updateTextMenu();
   }
   // переключить свойство (Ж/К/Ч): кнопки сохраняют выделение -> используем только живой диапазон
@@ -741,11 +819,11 @@ function start(room) {
     canvas.requestRenderAll();
   }
   function requestUndo() {
-    textBatcher.flushAll();
+    textSync.finishAll();
     socket.emit('undo');
   }
   function requestRedo() {
-    textBatcher.flushAll();
+    textSync.finishAll();
     socket.emit('redo');
   }
   document.getElementById('undoBtn').onclick = requestUndo;
@@ -778,10 +856,13 @@ function start(room) {
     e.preventDefault();
   });
   document.getElementById('clearBtn').onclick = () => {
-    textBatcher.flushAll();
+    textSync.finishAll();
     const objs = canvas.getObjects().map((o) => serialize(o));
     if (!objs.length) return;
     if (!confirm('Очистить доску у всех участников?')) return;
+    for (const id of objectGenerations.keys()) {
+      objectGenerations.set(id, objectGenerations.get(id) + 1);
+    }
     beginRemote();                  // молча убираем объекты, чтобы не сыпать remove-операциями
     canvas.clear();
     objectIndex.clear();
@@ -794,7 +875,7 @@ function start(room) {
 
   // Защита от случайного закрытия/перезагрузки: встроенный диалог браузера, если на доске что-то есть
   window.addEventListener('beforeunload', (e) => {
-    textBatcher.flushAll();
+    textSync.finishAll();
     if (!leaving && canvas.getObjects().length > 0) {
       e.preventDefault();
       e.returnValue = ''; // современные браузеры показывают свой стандартный текст
@@ -805,7 +886,7 @@ function start(room) {
   document.getElementById('exitBtn').onclick = () => {
     if (!confirm('Выйти из комнаты? Несохранённая доска будет потеряна.')) return;
     leaving = true;               // осознанный выход — без двойного предупреждения beforeunload
-    textBatcher.flushAll();
+    textSync.finishAll();
     socket.disconnect();          // второй участник увидит уменьшение числа участников
     window.location = location.pathname; // перезагрузка на лобби — полностью сбрасывает состояние
   };

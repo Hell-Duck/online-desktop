@@ -4,11 +4,59 @@ const { Server } = require('socket.io');
 const path = require('path');
 const { RoomStateStore } = require('./lib/room-state');
 
+const TEXT_FIELDS = [
+  'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'underline', 'linethrough',
+  'overline', 'fill', 'textAlign', 'lineHeight', 'charSpacing',
+];
+
+function normalizeTextSnapshot(input, id) {
+  if (!input || typeof input !== 'object' || typeof id !== 'string' || !id || id.length > 200 ||
+      typeof input.text !== 'string' || input.text.length > 100000 ||
+      (input.styles != null && (typeof input.styles !== 'object' || Array.isArray(input.styles)))) return null;
+  const result = { id, text: input.text, styles: input.styles || {} };
+  for (const field of TEXT_FIELDS) {
+    const value = input[field];
+    if (value == null || ['string', 'number', 'boolean'].includes(typeof value)) result[field] = value;
+    else return null;
+  }
+  let bytes;
+  try { bytes = Buffer.byteLength(JSON.stringify(result), 'utf8'); } catch { return null; }
+  return bytes <= 1024 * 1024 ? result : null;
+}
+
 function createBoardServer() {
   const app = express();
   const server = http.createServer(app);
   const io = new Server(server, { maxHttpBufferSize: 20 * 1024 * 1024 });
   const rooms = new RoomStateStore();
+  const textHeads = new Map();
+  const roomTextHeads = (room) => {
+    if (!textHeads.has(room)) textHeads.set(room, new Map());
+    return textHeads.get(room);
+  };
+  function updateTextHeads(room, op, dir = 'forward') {
+    const heads = roomTextHeads(room);
+    const remember = (snapshot) => {
+      const id = snapshot?.id;
+      const normalized = normalizeTextSnapshot(snapshot, id);
+      if (normalized) heads.set(id, normalized);
+    };
+    if (op.kind === 'text' || op.kind === 'modify') {
+      remember(dir === 'forward' ? op.after : op.before);
+    } else if (op.kind === 'add') {
+      if (dir === 'forward') remember(op.obj); else heads.delete(op.obj?.id);
+    } else if (op.kind === 'remove') {
+      if (dir === 'forward') heads.delete(op.obj?.id); else remember(op.obj);
+    } else if (op.kind === 'batch') {
+      for (const item of Array.isArray(op.items) ? op.items : []) {
+        remember(dir === 'forward' ? item?.after : item?.before);
+      }
+    } else if (op.kind === 'clear') {
+      const objects = Array.isArray(op.objs) ? op.objs : [];
+      if (dir === 'forward') for (const obj of objects) heads.delete(obj?.id);
+      else for (const obj of objects) remember(obj);
+    }
+  }
 
   app.use(express.static(path.join(__dirname, 'public')));
 
@@ -37,20 +85,60 @@ function createBoardServer() {
 
     socket.on('op', (op) => {
       if (!currentRoom || !op || typeof op !== 'object') return;
+      if (op.kind === 'text') {
+        const id = op.id;
+        const after = normalizeTextSnapshot(op.after, id);
+        const proposedBefore = normalizeTextSnapshot(op.before, id);
+        if (!after || !proposedBefore) return;
+        const heads = roomTextHeads(currentRoom);
+        const normalized = { kind: 'text', id, before: heads.get(id) || proposedBefore, after };
+        heads.set(id, after);
+        rooms.pushOperation(currentRoom, normalized);
+        io.to(currentRoom).emit('op:apply', { op: normalized, dir: 'forward' });
+        return;
+      }
+      if ((op.kind === 'batch' && !Array.isArray(op.items)) ||
+          (op.kind === 'clear' && !Array.isArray(op.objs)) ||
+          (['add', 'remove'].includes(op.kind) && (!op.obj || typeof op.obj !== 'object')) ||
+          (op.kind === 'modify' && (!op.before || typeof op.before !== 'object' ||
+            !op.after || typeof op.after !== 'object')) ||
+          !['add', 'remove', 'modify', 'batch', 'clear'].includes(op.kind)) return;
+      updateTextHeads(currentRoom, op);
       rooms.pushOperation(currentRoom, op);
       socket.to(currentRoom).emit('op:apply', { op, dir: 'forward' });
+    });
+
+    socket.on('text:preview', (message) => {
+      if (!currentRoom || !message || typeof message !== 'object' ||
+          typeof message.id !== 'string' || !message.id || message.id.length > 200 ||
+          !Number.isSafeInteger(message.revision) || message.revision < 1 ||
+          !message.snapshot || typeof message.snapshot !== 'object') return;
+      const snapshot = normalizeTextSnapshot(message.snapshot, message.id);
+      if (!snapshot) return;
+      socket.to(currentRoom).emit('text:preview', {
+        from: socket.id,
+        id: message.id,
+        revision: message.revision,
+        snapshot,
+      });
     });
 
     socket.on('undo', () => {
       if (!currentRoom) return;
       const op = rooms.undo(currentRoom);
-      if (op) io.to(currentRoom).emit('op:apply', { op, dir: 'inverse' });
+      if (op) {
+        updateTextHeads(currentRoom, op, 'inverse');
+        io.to(currentRoom).emit('op:apply', { op, dir: 'inverse' });
+      }
     });
 
     socket.on('redo', () => {
       if (!currentRoom) return;
       const op = rooms.redo(currentRoom);
-      if (op) io.to(currentRoom).emit('op:apply', { op, dir: 'forward' });
+      if (op) {
+        updateTextHeads(currentRoom, op, 'forward');
+        io.to(currentRoom).emit('op:apply', { op, dir: 'forward' });
+      }
     });
 
     socket.on('view:set', (data) => {
@@ -71,10 +159,14 @@ function createBoardServer() {
 
     socket.on('disconnect', () => {
       if (!currentRoom) return;
+      socket.to(currentRoom).emit('text:preview:end', { from: socket.id });
       io.to(currentRoom).emit('cursor', { from: socket.id, visible: false });
       const count = io.sockets.adapter.rooms.get(currentRoom)?.size || 0;
       io.to(currentRoom).emit('peers', count);
-      if (count === 0) rooms.delete(currentRoom);
+      if (count === 0) {
+        rooms.delete(currentRoom);
+        textHeads.delete(currentRoom);
+      }
     });
   });
 

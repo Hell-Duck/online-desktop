@@ -142,6 +142,85 @@
     return { change, flush, flushAll };
   }
 
+  function createTextSessionSync(channels, intervalMs, timers = {}) {
+    const sessions = new Map();
+    const revisions = new Map();
+
+    function createSession(id, before) {
+      const sendPreview = createTrailingThrottle((snapshot) => {
+        const revision = (revisions.get(id) || 0) + 1;
+        revisions.set(id, revision);
+        channels.preview({ id, revision, snapshot });
+      }, intervalMs, timers);
+      const session = { before, after: before, sendPreview };
+      sessions.set(id, session);
+      return session;
+    }
+
+    function change(id, before, after) {
+      if (!id || !after) return false;
+      const session = sessions.get(id) || createSession(id, before);
+      session.after = after;
+      session.sendPreview(after);
+      return true;
+    }
+
+    function finish(id) {
+      const session = sessions.get(id);
+      if (!session) return false;
+      session.sendPreview.flush();
+      session.sendPreview.cancel();
+      sessions.delete(id);
+      channels.commit({ kind: 'text', id, before: session.before, after: session.after });
+      return true;
+    }
+
+    function finishAll() {
+      for (const id of [...sessions.keys()]) finish(id);
+    }
+
+    function cancel(id) {
+      const session = sessions.get(id);
+      if (!session) return false;
+      session.sendPreview.cancel();
+      sessions.delete(id);
+      return true;
+    }
+
+    function cancelAll() {
+      for (const id of [...sessions.keys()]) cancel(id);
+    }
+
+    return { cancel, cancelAll, change, finish, finishAll, has: (id) => sessions.has(id) };
+  }
+
+  function createTextPreviewGate(apply) {
+    const latest = new Map();
+    return function accept(message) {
+      if (!message || !message.from || !message.id ||
+          !Number.isFinite(message.revision) || !message.snapshot) return false;
+      const key = `${message.from}:${message.id}`;
+      if (message.revision <= (latest.get(key) || 0)) return false;
+      latest.set(key, message.revision);
+      apply(message);
+      return true;
+    };
+  }
+
+  function applyTextSnapshot(target, snapshot) {
+    if (!target || !snapshot) return null;
+    const values = { text: typeof snapshot.text === 'string' ? snapshot.text : '', styles: snapshot.styles || {} };
+    const fields = [
+      'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'underline', 'linethrough',
+      'overline', 'fill', 'textAlign', 'lineHeight', 'charSpacing',
+    ];
+    fields.forEach((field) => { if (snapshot[field] !== undefined) values[field] = snapshot[field]; });
+    target.set(values);
+    if (typeof target.initDimensions === 'function') target.initDimensions();
+    if (typeof target.setCoords === 'function') target.setCoords();
+    return target;
+  }
+
   function fitWithin(width, height, maxSide) {
     const scale = Math.min(1, maxSide / Math.max(width, height));
     return {
@@ -166,10 +245,13 @@
   }
 
   return {
+    applyTextSnapshot,
     createRenderScheduler,
     createRevisionGate,
     createObjectIndex,
     createTextBatcher,
+    createTextPreviewGate,
+    createTextSessionSync,
     createTrailingThrottle,
     fitWithin,
     replaceCanvasObjectPreservingStack,
