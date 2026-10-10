@@ -230,6 +230,27 @@
     };
   }
 
+  async function encodeImageWithinLimit(source, mimeType, maxBytes, createCanvas) {
+    if (!['image/png', 'image/jpeg'].includes(mimeType)) throw new Error('invalid image type');
+    const initial = fitWithin(source.naturalWidth, source.naturalHeight, 2048);
+    let width = Math.max(1, initial.width);
+    let height = Math.max(1, initial.height);
+    while (true) {
+      const canvas = createCanvas();
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(source, 0, 0, width, height);
+      const blob = await new Promise((resolve, reject) => canvas.toBlob(
+        (result) => result ? resolve(result) : reject(new Error('image encoding failed')),
+        mimeType, mimeType === 'image/jpeg' ? 0.85 : undefined,
+      ));
+      if (blob.size <= maxBytes) return blob;
+      if (width === 1 && height === 1) throw new Error('too_large');
+      width = Math.max(1, Math.floor(width / 2));
+      height = Math.max(1, Math.floor(height / 2));
+    }
+  }
+
   function replaceCanvasObjectPreservingStack(canvas, existing, replacement) {
     if (!existing) {
       canvas.add(replacement);
@@ -244,14 +265,67 @@
     }
   }
 
+  function createSnapshotReceiver() {
+    let session = null, parts = [], completed = null, lastSession = null;
+    const old = new Set();
+    const abandon = (id) => { if (id) { old.add(id); if (old.size > 16) old.delete(old.values().next().value); } };
+    return {
+      accept(packet) {
+        if (!packet || typeof packet.session !== 'string') return false;
+        if (packet.abort) {
+          if (packet.session === session) { abandon(session); session = null; parts = []; completed = null; }
+          return true;
+        }
+        if (old.has(packet.session) || packet.session === lastSession) return false;
+        if (packet.index === 0 && packet.session !== session) {
+          abandon(session); session = packet.session; parts = []; completed = null;
+        }
+        if (session !== packet.session || packet.index !== parts.length ||
+            !Number.isSafeInteger(packet.total) || packet.total < 1 || packet.total > 100000 ||
+            typeof packet.data !== 'string') return false;
+        parts.push(packet.data);
+        if (parts.length === packet.total) {
+          try {
+            const parsed = JSON.parse(parts.join(''));
+            if (parsed.version !== packet.version) throw Error('version');
+            completed = parsed; abandon(lastSession); lastSession = session; session = null; parts = [];
+          } catch { abandon(session); session = null; parts = []; return false; }
+        }
+        return true;
+      },
+      result() { return completed; },
+      reset() { abandon(session); session = null; parts = []; completed = null; },
+    };
+  }
+
+  function objectChanges(before, after) {
+    const result = {};
+    Object.keys(after).forEach((key) => {
+      if (key === 'id' || key === 'type' || key === 'src' || key === 'eraser') return;
+      if (JSON.stringify(before?.[key]) !== JSON.stringify(after[key])) result[key] = after[key];
+    });
+    return result;
+  }
+
+  function eraserDelta(before, after) {
+    const prior = before?.eraser?.objects || [];
+    const current = after?.eraser?.objects || [];
+    if (current.length <= prior.length) return null;
+    return { baseCount: prior.length, eraser: { ...after.eraser, objects: current.slice(prior.length) } };
+  }
+
   return {
     applyTextSnapshot,
     createRenderScheduler,
+    createSnapshotReceiver,
     createRevisionGate,
     createObjectIndex,
     createTextBatcher,
     createTextPreviewGate,
     createTextSessionSync,
+    encodeImageWithinLimit,
+    eraserDelta,
+    objectChanges,
     createTrailingThrottle,
     fitWithin,
     replaceCanvasObjectPreservingStack,

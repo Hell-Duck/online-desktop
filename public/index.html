@@ -97,6 +97,8 @@
     #toolbar .room-info b { color: var(--ink); max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
     .room-status { display: inline-flex; align-items: center; gap: 5px; color: var(--accent-strong); font-weight: 750; }
     .online-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    #connectionStatus { color: var(--muted); font-size: 11px; max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+    button:disabled, input:disabled, select:disabled { opacity: .48; cursor: not-allowed !important; }
     #exitBtn { margin-left: 10px; border-color: #ffd4d0 !important; color: var(--danger); background: #fff6f5 !important; }
     #exitBtn:hover { background: var(--danger) !important; color: #fff; }
     #clearBtn { color: #c84d46; }
@@ -219,7 +221,7 @@
     <button id="saveBtn" title="Сохранить доску в PNG (всё нарисованное)"><svg class="icon"><use href="#i-save"/></svg>Сохранить</button>
     <button id="clearBtn" title="Очистить доску">Очистить</button>
     <input type="file" id="imageInput" accept="image/*" style="display:none" />
-    <div class="room-info"><span class="room-caption">Комната:</span> <b id="roomLabel"></b><span class="room-separator">·</span><span class="room-status"><span class="online-dot"></span><span id="peerCount">1</span> онлайн</span></div>
+    <div class="room-info"><span class="room-caption">Комната:</span> <b id="roomLabel"></b><span class="room-separator">·</span><span class="room-status"><span class="online-dot"></span><span id="peerCount">—</span> онлайн</span><span id="connectionStatus" role="status">Подключение…</span></div>
     <button id="exitBtn" title="Выйти из комнаты"><svg class="icon"><use href="#i-exit"/></svg>Выйти</button>
   </div>
 

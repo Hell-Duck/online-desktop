@@ -5,6 +5,11 @@ const path = require('node:path');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
 
+test('connection state is visible alongside room and presence', () => {
+  assert.match(html, /id="connectionStatus"[^>]*role="status"/);
+  assert.match(html, /id="peerCount"/);
+});
+
 test('board exposes mouse controls for shared history and zoom', () => {
   for (const id of ['undoBtn', 'redoBtn', 'zoomLabel']) {
     assert.match(html, new RegExp(`id=["']${id}["']`), `missing #${id}`);

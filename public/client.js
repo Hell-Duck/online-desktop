@@ -86,7 +86,14 @@ function start(room) {
   const CLIP_MARKER = 'ONLINE_DESKTOP_OBJECTS'; // метка в системном буфере: «последним копировали доску»
 
   /* --- Синхронизация и ОБЩАЯ история (единый стек на сервере) --- */
-  const serialize = (obj) => obj.toObject();
+  const serialize = (obj) => {
+    const json = obj.toObject();
+    if (json.type === 'image' && typeof json.src === 'string') {
+      const url = new URL(json.src, location.href);
+      if (url.origin === location.origin && /^\/board-assets\/[a-f0-9]{64}$/.test(url.pathname)) json.src = url.pathname;
+    }
+    return json;
+  };
   const TEXT_FIELDS = [
     'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'underline', 'linethrough',
     'overline', 'fill', 'textAlign', 'lineHeight', 'charSpacing',
@@ -116,8 +123,169 @@ function start(room) {
   const beginRemote = () => { remoteDepth++; applyingRemote = true; };
   const endRemote = () => { remoteDepth = Math.max(0, remoteDepth - 1); applyingRemote = remoteDepth > 0; };
 
-  // Отправить операцию: сервер запишет её в общую историю и применит у остальных участников
-  const sendOp = (op) => socket.emit('op', op);
+  let ready = false;
+  let sceneVersion = 0;
+  let syncEpoch = 0;
+  let sending = false;
+  let pending = [];
+  let sceneDirty = false;
+  let onlineCount = 0;
+  const ownCommands = new Set();
+  const snapshotReceiver = BoardUtils.createSnapshotReceiver();
+  const connectionStatus = document.getElementById('connectionStatus');
+  function setConnectionState(label, canEdit) {
+    ready = canEdit;
+    connectionStatus.textContent = label;
+    canvas.upperCanvasEl.style.pointerEvents = canEdit ? '' : 'none';
+    document.getElementById('peerCount').textContent = canEdit ? onlineCount : '—';
+    for (const element of document.querySelectorAll('#toolbar button:not(#exitBtn):not(#saveBtn), #toolbar select, #toolbar input, #sidebar button, #colorPalette button, #colorPalette input')) {
+      element.disabled = !canEdit;
+    }
+  }
+  function resync(reason = 'Синхронизация…') {
+    ++syncEpoch;
+    pending = [];
+    sending = false;
+    ownCommands.clear();
+    sceneDirty = false;
+    snapshotReceiver.reset();
+    setConnectionState(reason, false);
+    if (socket.connected) socket.emit('scene:sync');
+  }
+  function translateOperation(op) {
+    if (op.kind === 'add') return { kind: 'add', obj: op.obj };
+    if (op.kind === 'remove') return { kind: 'remove', id: op.obj?.id };
+    if (op.kind === 'modify') return { kind: 'patch', id: op.after?.id,
+      changes: BoardUtils.objectChanges(op.before, op.after) };
+    if (op.kind === 'text') return { kind: 'text', id: op.id,
+      text: op.after.text, styles: op.after.styles, fields: op.after };
+    if (op.kind === 'clear') return { kind: 'clear' };
+    if (op.kind === 'sheet') return { kind: 'sheet', type: op.type };
+    if (op.kind === 'undo' || op.kind === 'redo') return { kind: op.kind };
+    if (op.kind === 'batch') return { kind: 'erase', targets: op.items.map((item) => ({
+      id: item.after?.id, ...BoardUtils.eraserDelta(item.before, item.after),
+    })) };
+    return null;
+  }
+  async function drainCommands() {
+    if (sending || !ready || !socket.connected) return;
+    sending = true;
+    const epoch = syncEpoch;
+    while (pending.length && ready && socket.connected && epoch === syncEpoch) {
+      const cmd = pending[0];
+      cmd.expectedVersion = sceneVersion;
+      try {
+        const answer = await socket.timeout(5000).emitWithAck('scene:command', cmd);
+        if (epoch !== syncEpoch) return;
+        if (answer.rejected) { resync('Правка отклонена (' + answer.rejected + '). Восстановление…'); return; }
+        sceneVersion = Math.max(sceneVersion, answer.version);
+        ownCommands.delete(cmd.commandId);
+        pending.shift();
+        if (cmd.kind === 'undo' || cmd.kind === 'redo') { resync(); return; }
+      } catch { if (epoch === syncEpoch) resync('Связь прервана. Восстановление…'); return; }
+    }
+    sending = false;
+  }
+  function sendOp(op) {
+    if (!ready) return;
+    const command = translateOperation(op);
+    if (!command) return;
+    command.commandId = uid();
+    ownCommands.add(command.commandId);
+    pending.push(command);
+    if (pending.length > 128) { resync('Слишком много правок. Восстановление…'); return; }
+    drainCommands();
+  }
+  socket.on('connect', () => {
+    resync('Подключение…');
+    socket.emit('join', { room, initialView: currentView() });
+    socket.emit('scene:sync');
+  });
+  socket.on('disconnect', () => {
+    ++syncEpoch;
+    pending = [];
+    sending = false;
+    snapshotReceiver.reset();
+    setConnectionState('Нет соединения', false);
+    textSync.cancelAll();
+  });
+  socket.on('scene:chunk', (packet, ack) => {
+    const accepted = snapshotReceiver.accept(packet);
+    if (typeof ack === 'function') ack(accepted);
+  });
+  let loadingScene = false;
+  let queuedScene = null;
+  function loadScene(snapshot, epoch) {
+    if (loadingScene) { queuedScene = { snapshot, epoch }; return; }
+    loadingScene = true;
+    beginRemote();
+    canvas.loadFromJSON({ objects: snapshot.objects }, () => {
+      loadingScene = false;
+      if (epoch !== syncEpoch) {
+        endRemote();
+        if (queuedScene) {
+          const next = queuedScene;
+          queuedScene = null;
+          loadScene(next.snapshot, next.epoch);
+        }
+        return;
+      }
+      objectIndex.rebuild(canvas.getObjects());
+      Object.keys(stateCache).forEach((id) => delete stateCache[id]);
+      canvas.getObjects().forEach((obj) => cacheObj(obj));
+      applySheet(snapshot.sheet);
+      refreshErasable();
+      canvas.requestRenderAll();
+      endRemote();
+      sceneVersion = snapshot.version;
+      if (sceneDirty) { resync(); return; }
+      setConnectionState('Синхронизировано', true);
+      drainCommands();
+    });
+  }
+  socket.on('scene:ready', ({ version }) => {
+    const snapshot = snapshotReceiver.result();
+    if (!snapshot || snapshot.version !== version) { resync(); return; }
+    loadScene(snapshot, syncEpoch);
+  });
+  socket.on('scene:error', ({ reason } = {}) => {
+    setConnectionState('Ошибка загрузки: ' + reason, false);
+    if (reason === 'busy') {
+      const epoch = syncEpoch;
+      setTimeout(() => { if (epoch === syncEpoch && socket.connected) resync(); }, 1000);
+    }
+  });
+  socket.on('scene:change', (result) => {
+    if (!ready) { sceneDirty = true; return; }
+    if (result.version <= sceneVersion) return;
+    if (result.version !== sceneVersion + 1) { resync(); return; }
+    sceneVersion = result.version;
+    if (ownCommands.delete(result.operation?.commandId)) return;
+    if (result.operation?.kind === 'resync') {
+      resync(); return;
+    }
+    const op = result.operation;
+    if (op.kind === 'add') upsertLocal(op.obj);
+    else if (op.kind === 'remove') removeLocal(op.id);
+    else if (op.kind === 'patch') {
+      const before = stateCache[op.id];
+      if (!before) { resync(); return; }
+      upsertLocal({ ...before, ...op.changes });
+    } else if (op.kind === 'text') {
+      textSync.cancel(op.id);
+      remotePreviewOwners.delete(op.id);
+      updateTextLocal({ id: op.id, text: op.text, styles: op.styles, ...op.fields });
+    } else if (op.kind === 'clear') clearLocal();
+    else if (op.kind === 'sheet') applySheet(op.type);
+    else if (op.kind === 'erase') {
+      for (const target of op.targets) {
+        const before = stateCache[target.id];
+        if (!before || (before.eraser?.objects?.length || 0) !== target.baseCount) { resync(); return; }
+        upsertLocal({ ...before, eraser: { ...target.eraser,
+          objects: [...(before.eraser?.objects || []), ...target.eraser.objects] } });
+      }
+    }
+  });
   const textSync = BoardUtils.createTextSessionSync({
     preview: (message) => socket.emit('text:preview', message),
     commit: sendOp,
@@ -169,6 +337,18 @@ function start(room) {
   canvas.on('object:modified', (e) => {
     if (applyingRemote) return;
     const obj = e.target;
+    if (obj?.type === 'activeSelection') {
+      const children = obj.getObjects().slice();
+      canvas.discardActiveObject(); // привести координаты детей к координатам сцены
+      children.forEach((child) => {
+        const before = stateCache[child.id];
+        const after = serialize(child);
+        cacheObj(child, after);
+        sendOp({ kind: 'modify', before, after });
+      });
+      canvas.setActiveObject(new fabric.ActiveSelection(children, { canvas }));
+      return;
+    }
     if (suppressNextTextModified.delete(obj.id)) return;
     const before = stateCache[obj.id];
     const after = serialize(obj);
@@ -229,15 +409,17 @@ function start(room) {
   }
 
   function upsertLocal(json) {
+    const epoch = syncEpoch;
     const generation = (objectGenerations.get(json.id) || 0) + 1;
     objectGenerations.set(json.id, generation);
+    stateCache[json.id] = json; // последующие команды могут прийти до асинхронной загрузки Fabric
     beginRemote();
     const ex = byId(json.id);
     if (ex) {
       objectIndex.delete(json.id);
     }
     fabric.util.enlivenObjects([json], ([o]) => {
-      if (objectGenerations.get(json.id) !== generation) { endRemote(); return; }
+      if (epoch !== syncEpoch || objectGenerations.get(json.id) !== generation) { endRemote(); return; }
       o.id = json.id;
       o.erasable = !(currentTool === 'eraser-soft' && o.type === 'image'); // защита картинок в мягком режиме
       o.selectable = currentTool === 'select';
@@ -279,32 +461,8 @@ function start(room) {
     canvas.renderAll();
     endRemote();
   }
-  function applyOp(op, dir) {
-    if (op.kind === 'add') {
-      if (dir === 'forward') upsertLocal(op.obj); else removeLocal(op.obj.id);
-    } else if (op.kind === 'remove') {
-      if (dir === 'forward') removeLocal(op.obj.id); else upsertLocal(op.obj);
-    } else if (op.kind === 'modify') {
-      const json = dir === 'forward' ? op.after : op.before;
-      if (json) upsertLocal(json);
-    } else if (op.kind === 'text') {
-      const json = dir === 'forward' ? op.after : op.before;
-      if (json) {
-        textSync.cancel(json.id);
-        remotePreviewOwners.delete(json.id);
-        updateTextLocal(json);
-      }
-    } else if (op.kind === 'batch') {
-      op.items.forEach((i) => { const j = dir === 'forward' ? i.after : i.before; if (j) upsertLocal(j); });
-    } else if (op.kind === 'clear') {
-      if (dir === 'forward') clearLocal();
-      else (op.objs || []).forEach((j) => upsertLocal(j));
-    }
-    canvas.discardActiveObject();
-    scheduleRender();
-  }
-  socket.on('op:apply', ({ op, dir }) => applyOp(op, dir));
   socket.on('text:preview', BoardUtils.createTextPreviewGate((message) => {
+    if (!ready) return;
     if (textSync.has(message.id)) return;
     remotePreviewOwners.set(message.id, message.from);
     updateTextLocal({ ...message.snapshot, id: message.id }, false);
@@ -345,27 +503,10 @@ function start(room) {
     return changed;
   }
 
-  // Синхронизация состояния при входе нового участника (объекты + вид листа)
-  socket.on('request-state', (newId) => {
-    socket.emit('send-state', {
-      to: newId,
-      state: { objects: { objects: Object.values(stateCache) }, sheet: currentSheet },
-    });
+  socket.on('peers', (n) => {
+    onlineCount = n;
+    if (ready) document.getElementById('peerCount').textContent = n;
   });
-  socket.on('load-state', (state) => {
-    beginRemote();
-    canvas.loadFromJSON(state.objects, () => {
-      objectIndex.rebuild(canvas.getObjects());
-      Object.keys(stateCache).forEach((id) => delete stateCache[id]);
-      canvas.getObjects().forEach((obj) => cacheObj(obj));
-      if (state.sheet) applySheet(state.sheet);
-      canvas.renderAll();
-      endRemote();
-    });
-  });
-  socket.on('sheet:set', ({ type }) => applySheet(type)); // чужой сменил вид листа
-
-  socket.on('peers', (n) => { document.getElementById('peerCount').textContent = n; });
 
   /* ---------- Инструменты ---------- */
   // Кисти: карандаш и пиксельный ластик (EraserBrush стирает части объектов, а не объект целиком)
@@ -683,48 +824,48 @@ function start(room) {
   });
 
   /* --- Картинки --- */
-  // Добавить картинку из dataURL (base64), центром в точке point (сцена). По умолчанию — центр экрана.
-  function addImage(dataURL, point) {
-    fabric.Image.fromURL(dataURL, (img) => {
+  // Добавить принятую сервером картинку, центром в точке point (сцена).
+  function addImage(assetURL, point, epoch) {
+    fabric.Image.fromURL(assetURL, (img) => {
+      if (!ready || epoch !== syncEpoch || !img) return;
       const scale = Math.min(1, 400 / img.width);
       img.set({ scaleX: scale, scaleY: scale, id: uid(), erasable: currentTool !== 'eraser-soft' });
       const p = point || viewportCenterScene();
       img.setPositionByOrigin(new fabric.Point(p.x, p.y), 'center', 'center');
       img.setCoords();
-      canvas.add(img); // object:added транслирует картинку (base64) остальным
+      canvas.add(img); // object:added передаст только ссылку на картинку
       canvas.setActiveObject(img);
       canvas.requestRenderAll();
     });
   }
 
   function readFileAsImage(file, point) {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onerror = () => alert('Не удалось прочитать изображение.');
-    reader.onload = (ev) => {
-      const originalDataURL = ev.target.result;
-      const source = new Image();
-      source.onerror = () => alert('Не удалось открыть изображение. Проверьте формат файла.');
-      source.onload = () => {
-        const fitted = BoardUtils.fitWithin(source.naturalWidth, source.naturalHeight, 2048);
-        if (fitted.scale === 1) {
-          addImage(originalDataURL, point);
-          return;
-        }
-        const resized = document.createElement('canvas');
-        resized.width = fitted.width;
-        resized.height = fitted.height;
-        const context = resized.getContext('2d');
-        context.drawImage(source, 0, 0, fitted.width, fitted.height);
-        const keepsTransparency = file.type === 'image/png';
-        const dataURL = keepsTransparency
-          ? resized.toDataURL('image/png')
-          : resized.toDataURL('image/jpeg', 0.88);
-        addImage(dataURL, point);
-      };
-      source.src = originalDataURL;
+    if (!file || !ready) return;
+    const epoch = syncEpoch;
+    if (!['image/png', 'image/jpeg'].includes(file.type)) {
+      alert('Поддерживаются только PNG и JPEG.');
+      return;
+    }
+    const source = new Image();
+    const localURL = URL.createObjectURL(file);
+    source.onerror = () => { URL.revokeObjectURL(localURL); alert('Не удалось открыть изображение.'); };
+    source.onload = async () => {
+      URL.revokeObjectURL(localURL);
+      if (!ready || epoch !== syncEpoch) return;
+      try {
+        const encoded = await BoardUtils.encodeImageWithinLimit(
+          source, file.type, 2 * 1024 * 1024, () => document.createElement('canvas'),
+        );
+        if (!ready || epoch !== syncEpoch) return;
+        const response = await fetch('/board-assets?room=' + encodeURIComponent(room), {
+          method: 'POST', headers: { 'content-type': file.type }, body: encoded,
+        });
+        if (!response.ok) throw new Error('Загрузка отклонена сервером: ' + response.status);
+        const asset = await response.json();
+        if (ready && epoch === syncEpoch) addImage(asset.url, point, epoch);
+      } catch (error) { if (ready && epoch === syncEpoch) alert('Не удалось добавить картинку. ' + error.message); }
     };
-    reader.readAsDataURL(file);
+    source.src = localURL;
   }
 
   const imageInput = document.getElementById('imageInput');
@@ -754,8 +895,10 @@ function start(room) {
 
   // Вставить скопированные объекты доски с центром в точке point (сцена)
   function pasteInternal(point) {
-    if (!internalClipboard) return;
+    if (!internalClipboard || !ready) return;
+    const epoch = syncEpoch;
     internalClipboard.clone((clone) => {
+      if (!ready || epoch !== syncEpoch) return;
       canvas.discardActiveObject();
       const p = point || viewportCenterScene();
       clone.setPositionByOrigin(new fabric.Point(p.x, p.y), 'center', 'center'); // центр вставки = курсор/центр экрана
@@ -788,6 +931,7 @@ function start(room) {
 
   // Ctrl+V. Приоритет — последнему копированию: если в буфере наша метка, значит копировали объекты доски.
   window.addEventListener('paste', (e) => {
+    if (!ready) return;
     // не перехватываем вставку, если редактируется текст на доске
     const active = canvas.getActiveObject();
     if (active && active.isEditing) return;
@@ -820,15 +964,16 @@ function start(room) {
   }
   function requestUndo() {
     textSync.finishAll();
-    socket.emit('undo');
+    sendOp({ kind: 'undo' });
   }
   function requestRedo() {
     textSync.finishAll();
-    socket.emit('redo');
+    sendOp({ kind: 'redo' });
   }
   document.getElementById('undoBtn').onclick = requestUndo;
   document.getElementById('redoBtn').onclick = requestRedo;
   window.addEventListener('keydown', (e) => {
+    if (!ready) return;
     if (isTypingInField()) return; // печатаем в поле тулбара — не трогаем доску
     if (e.key === 'Delete' || e.key === 'Backspace') {
       const ao = canvas.getActiveObject();
@@ -966,7 +1111,7 @@ function start(room) {
   }
   document.getElementById('sheet').addEventListener('change', (e) => {
     applySheet(e.target.value);
-    socket.emit('sheet:set', { type: currentSheet }); // синхронизируем вид со вторым участником
+    sendOp({ kind: 'sheet', type: currentSheet });
   });
 
   /* --- Курсор для другого участника --- */
@@ -1051,5 +1196,5 @@ function start(room) {
   };
   applySheet('white');
   setTool('select');
-  socket.emit('join', { room, initialView: currentView() });
+  setConnectionState('Подключение…', false);
 }
