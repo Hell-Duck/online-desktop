@@ -9,12 +9,29 @@ const {
   createTextBatcher,
   createTextPreviewGate,
   createTextSessionSync,
+  createSnapshotReceiver,
+  encodeImageWithinLimit,
+  eraserDelta,
+  objectChanges,
   createTrailingThrottle,
   fitWithin,
   replaceCanvasObjectPreservingStack,
   transformFromView,
   viewFromTransform,
 } = require('../public/board-utils');
+
+test('compact object changes omit image data and eraser sends only newly added path', () => {
+  const before = { id: 'a', type: 'image', src: '/board-assets/' + 'a'.repeat(64), left: 0,
+    eraser: { objects: [{ path: [1] }] } };
+  const after = { ...before, left: 20, eraser: { objects: [...before.eraser.objects, { path: [2] }] } };
+  assert.deepEqual(objectChanges(before, after), { left: 20 });
+  assert.deepEqual(eraserDelta(before, after), { baseCount: 1,
+    eraser: { objects: [{ path: [2] }] } });
+  const receiver = createSnapshotReceiver();
+  assert.equal(receiver.accept({ session: 's', index: 0, total: 1, version: 1,
+    data: JSON.stringify({ version: 1, objects: [after] }) }), true);
+  assert.deepEqual(receiver.result().objects, [after]);
+});
 
 function createFakeClock() {
   let now = 0;
@@ -172,6 +189,23 @@ test('fitWithin preserves ratio and never enlarges a small image', () => {
     height: 600,
     scale: 1,
   });
+});
+
+test('image encoding reduces dimensions until PNG fits without changing transparency format', async () => {
+  const attempts = [];
+  const source = { naturalWidth: 1200, naturalHeight: 600 };
+  const encoded = await encodeImageWithinLimit(source, 'image/png', 20, () => ({
+    getContext() { return { drawImage() {} }; },
+    toBlob(callback, type) {
+      attempts.push({ width: this.width, height: this.height, type });
+      callback({ size: this.width > 600 ? 30 : 15, type });
+    },
+  }));
+  assert.equal(encoded.size, 15);
+  assert.deepEqual(attempts, [
+    { width: 1200, height: 600, type: 'image/png' },
+    { width: 600, height: 300, type: 'image/png' },
+  ]);
 });
 
 test('replacing a synchronized object preserves its canvas layer', () => {
