@@ -76,6 +76,26 @@
     };
   }
 
+  function createWheelZoomBatcher(apply, raf = (fn) => requestAnimationFrame(fn)) {
+    let pending = false;
+    let delta = 0;
+    let point = null;
+    return function queueWheelZoom(nextDelta, nextPoint) {
+      delta += nextDelta;
+      point = nextPoint;
+      if (pending) return;
+      pending = true;
+      raf(() => {
+        pending = false;
+        const total = delta;
+        const anchor = point;
+        delta = 0;
+        point = null;
+        apply(total, anchor);
+      });
+    };
+  }
+
   function createRevisionGate(apply) {
     let latestRevision = -1;
     return function accept(view) {
@@ -317,6 +337,7 @@
   return {
     applyTextSnapshot,
     createRenderScheduler,
+    createWheelZoomBatcher,
     createSnapshotReceiver,
     createRevisionGate,
     createObjectIndex,

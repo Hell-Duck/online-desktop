@@ -45,6 +45,8 @@ function start(room) {
   const socket = io();
 
   const canvasEl = document.getElementById('board');
+  // При зуме Fabric пересоздаёт кэши объектов; ограничиваем пиксели каждого кэша.
+  fabric.perfLimitSizeTotal = Math.min(fabric.perfLimitSizeTotal, 1024 * 1024);
   const canvas = new fabric.Canvas('board', { backgroundColor: '#ffffff' });
   window.boardCanvas = canvas; // ссылка для отладки/тестов
 
@@ -698,16 +700,25 @@ function start(room) {
   /* --- Навигация: общий для комнаты масштаб и положение полотна --- */
   let isPanning = false, lastPosX = 0, lastPosY = 0, spaceDown = false;
   const isPanMode = () => currentTool === 'pan' || spaceDown;
+  const renderPanFrame = BoardUtils.createRenderScheduler(() => {
+    canvas.calcViewportBoundaries();
+    canvas.requestRenderAll();
+    renderCursors();
+    publishView();
+  });
+
+  const queueWheelZoom = BoardUtils.createWheelZoomBatcher((deltaY, point) => {
+    const zoom = Math.min(5, Math.max(0.15, canvas.getZoom() * Math.pow(0.999, deltaY)));
+    canvas.zoomToPoint(point, zoom);
+    publishView();
+    renderCursors();
+  });
 
   // Зум колесом мыши к точке курсора
   canvas.on('mouse:wheel', (opt) => {
-    let zoom = canvas.getZoom() * Math.pow(0.999, opt.e.deltaY);
-    zoom = Math.min(5, Math.max(0.15, zoom)); // ограничиваем масштаб
-    canvas.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, zoom);
-    publishView();
+    queueWheelZoom(opt.e.deltaY, { x: opt.e.offsetX, y: opt.e.offsetY });
     opt.e.preventDefault();
     opt.e.stopPropagation();
-    renderCursors(); // пересчитать положение чужих курсоров под новый масштаб
   });
 
   // Пробел временно включает «руку» (как в графических редакторах)
@@ -789,9 +800,7 @@ function start(room) {
       vpt[5] += opt.e.clientY - lastPosY;
       lastPosX = opt.e.clientX;
       lastPosY = opt.e.clientY;
-      canvas.requestRenderAll();
-      renderCursors(); // курсоры других смещаются вместе с полотном
-      publishView();
+      renderPanFrame();
       return;
     }
     if (!draft) return;
@@ -809,8 +818,10 @@ function start(room) {
   canvas.on('mouse:up', () => {
     if (isPanning) {
       isPanning = false;
+      canvas.setViewportTransform(canvas.viewportTransform.slice()); // обновить координаты выбора после сдвига
       canvas.selection = currentTool === 'select';
       canvas.setCursor(isPanMode() ? 'grab' : 'default');
+      publishView();
       sendView.flush();
       return;
     }

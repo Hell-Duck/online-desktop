@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   applyTextSnapshot,
   createRenderScheduler,
+  createWheelZoomBatcher,
   createRevisionGate,
   createObjectIndex,
   createTextBatcher,
@@ -115,6 +116,22 @@ test('render scheduler combines requests into one animation frame', () => {
   assert.equal(renders, 1);
   schedule();
   assert.equal(frames.length, 1);
+});
+
+test('wheel zoom batches deltas within one frame and keeps the latest pointer', () => {
+  const frames = [];
+  const applied = [];
+  const wheel = createWheelZoomBatcher((delta, point) => applied.push({ delta, point }),
+    (fn) => frames.push(fn));
+  wheel(20, { x: 1, y: 2 });
+  wheel(-5, { x: 3, y: 4 });
+  wheel(2, { x: 5, y: 6 });
+  assert.equal(frames.length, 1);
+  frames.shift()();
+  assert.deepEqual(applied, [{ delta: 17, point: { x: 5, y: 6 } }]);
+  wheel(7, { x: 8, y: 9 });
+  frames.shift()();
+  assert.equal(applied[1].delta, 7);
 });
 
 test('revision gate ignores stale shared views', () => {
