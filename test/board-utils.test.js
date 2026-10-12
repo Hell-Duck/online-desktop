@@ -166,6 +166,17 @@ test('revision gate ignores stale shared views', () => {
   assert.deepEqual(applied, [4, 5]);
 });
 
+test('shared view accepts a fresh revision series after reconnect', () => {
+  const applied = [];
+  const accept = createRevisionGate((view) => applied.push(view.centerX));
+  assert.equal(accept({ revision: 42, centerX: 10 }), true);
+  assert.equal(accept({ revision: 1, centerX: 20 }), false);
+  accept.reset();
+  assert.equal(accept({ revision: 1, centerX: 20 }), true);
+  assert.equal(accept({ revision: 1, centerX: 30 }), false);
+  assert.deepEqual(applied, [10, 20]);
+});
+
 test('object index replaces, removes, clears, and rebuilds objects by id', () => {
   const index = createObjectIndex();
   const first = { id: 'a', value: 1 };

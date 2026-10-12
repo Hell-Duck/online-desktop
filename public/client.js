@@ -199,11 +199,14 @@ function start(room) {
     drainCommands();
   }
   socket.on('connect', () => {
+    acceptRemoteView.reset(); // после перезапуска сервера счётчик вида начинается с единицы
+    sendView.cancel();
     resync('Подключение…');
     socket.emit('join', { room, initialView: currentView() });
     socket.emit('scene:sync');
   });
   socket.on('disconnect', () => {
+    sendView.cancel();
     ++syncEpoch;
     pending = [];
     sending = false;

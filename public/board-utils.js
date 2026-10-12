@@ -106,15 +106,16 @@
     return tools[event.code] || null;
   }
 
-
   function createRevisionGate(apply) {
     let latestRevision = -1;
-    return function accept(view) {
+    function accept(view) {
       if (!view || !Number.isFinite(view.revision) || view.revision <= latestRevision) return false;
       latestRevision = view.revision;
       apply(view);
       return true;
-    };
+    }
+    accept.reset = () => { latestRevision = -1; };
+    return accept;
   }
 
   function createObjectIndex() {
