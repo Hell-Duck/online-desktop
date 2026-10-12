@@ -698,19 +698,18 @@ function start(room) {
   applyColor(currentColor);
 
   /* --- Навигация: общий для комнаты масштаб и положение полотна --- */
-  let lastPosX = 0, lastPosY = 0;
-  const panState = BoardUtils.createPanState();
-  const isPanMode = () => panState.isMode(currentTool);
+  let isPanning = false, lastPosX = 0, lastPosY = 0;
   function finishPan() {
     canvas.setViewportTransform(canvas.viewportTransform.slice()); // обновить координаты выбора после сдвига
     canvas.selection = currentTool === 'select';
-    canvas.setCursor(isPanMode() ? 'grab' : (currentTool === 'select' ? 'default' : 'crosshair'));
+    canvas.setCursor(currentTool === 'pan' ? 'grab' : (currentTool === 'select' ? 'default' : 'crosshair'));
     publishView();
     sendView.flush();
   }
-  function cancelTemporaryPan() {
-    if (panState.cancel()) finishPan();
-    canvas.defaultCursor = currentTool === 'pan' ? 'grab' : (currentTool === 'select' ? 'default' : 'crosshair');
+  function cancelPanDrag() {
+    if (!isPanning) return;
+    isPanning = false;
+    finishPan();
   }
   const renderPanFrame = BoardUtils.createRenderScheduler(() => {
     canvas.calcViewportBoundaries();
@@ -733,24 +732,9 @@ function start(room) {
     opt.e.stopPropagation();
   });
 
-  // Пробел временно включает «руку» (как в графических редакторах)
-  window.addEventListener('keydown', (e) => {
-    if (e.code === 'Space' && !isTypingInField()) {
-      const ao = canvas.getActiveObject();
-      if (ao && ao.isEditing) return; // печатаем пробел в тексте
-      panState.pressSpace();
-      canvas.defaultCursor = 'grab';
-      e.preventDefault();
-    }
-  });
-  window.addEventListener('keyup', (e) => {
-    if (e.code === 'Space') {
-      if (panState.releaseSpace(currentTool)) finishPan();
-      canvas.defaultCursor = currentTool === 'pan' ? 'grab' : (currentTool === 'select' ? 'default' : 'crosshair');
-    }
-  });
-  window.addEventListener('blur', cancelTemporaryPan);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) cancelTemporaryPan(); });
+  // Отмена незаконченного перетаскивания при переключении окна.
+  window.addEventListener('blur', cancelPanDrag);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) cancelPanDrag(); });
 
   // Сброс вида: масштаб 1, позиция в начало
   document.getElementById('resetViewBtn').onclick = () => {
@@ -784,9 +768,9 @@ function start(room) {
   });
 
   canvas.on('mouse:down', (opt) => {
-    // перемещение полотна (инструмент «рука» или зажатый пробел)
-    if (isPanMode()) {
-      panState.begin(currentTool);
+    // Перемещение полотна инструментом «рука» (в том числе после пробела)
+    if (currentTool === 'pan') {
+      isPanning = true;
       canvas.selection = false;
       canvas.setCursor('grabbing');
       lastPosX = opt.e.clientX;
@@ -811,7 +795,7 @@ function start(room) {
   });
 
   canvas.on('mouse:move', (opt) => {
-    if (panState.isDragging()) {
+    if (isPanning) {
       const vpt = canvas.viewportTransform;
       vpt[4] += opt.e.clientX - lastPosX;
       vpt[5] += opt.e.clientY - lastPosY;
@@ -833,7 +817,8 @@ function start(room) {
   });
 
   canvas.on('mouse:up', () => {
-    if (panState.end()) {
+    if (isPanning) {
+      isPanning = false;
       finishPan();
       return;
     }

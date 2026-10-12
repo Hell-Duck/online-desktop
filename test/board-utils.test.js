@@ -6,7 +6,6 @@ const {
   createRenderScheduler,
   createWheelZoomBatcher,
   toolFromShortcut,
-  createPanState,
   createRevisionGate,
   createObjectIndex,
   createTextBatcher,
@@ -140,6 +139,7 @@ test('tool shortcuts use physical keys regardless of keyboard layout', () => {
   const shortcuts = [
     ['KeyV', 'select'], ['KeyP', 'pen'], ['KeyR', 'rect'],
     ['KeyC', 'circle'], ['KeyL', 'line'], ['KeyT', 'text'], ['KeyE', 'eraser'],
+    ['Space', 'pan'],
   ];
   for (const [code, tool] of shortcuts) {
     assert.equal(toolFromShortcut({ code, key: 'a' }), tool);
@@ -151,32 +151,9 @@ test('tool shortcuts use physical keys regardless of keyboard layout', () => {
   assert.equal(toolFromShortcut({ code: 'KeyV', metaKey: true }), null);
   assert.equal(toolFromShortcut({ code: 'KeyP', altKey: true }), null);
   assert.equal(toolFromShortcut({ code: 'KeyP', repeat: true }), null);
+  assert.equal(toolFromShortcut({ code: 'Space', repeat: true }), null);
+  assert.equal(toolFromShortcut({ code: 'Space', ctrlKey: true }), null);
   assert.equal(toolFromShortcut({ code: 'KeyA' }), null);
-});
-
-test('releasing space ends temporary drag, while the hand tool keeps dragging', () => {
-  const pan = createPanState();
-  pan.pressSpace();
-  assert.equal(pan.begin('select'), true);
-  assert.equal(pan.isDragging(), true);
-  assert.equal(pan.releaseSpace('select'), true);
-  assert.equal(pan.isDragging(), false);
-  assert.equal(pan.isMode('select'), false);
-
-  pan.pressSpace();
-  pan.begin('pan');
-  assert.equal(pan.releaseSpace('pan'), false);
-  assert.equal(pan.isDragging(), true);
-  assert.equal(pan.end(), true);
-});
-
-test('lost keyboard focus cancels a temporary pan without a keyup event', () => {
-  const pan = createPanState();
-  pan.pressSpace();
-  pan.begin('select');
-  assert.equal(pan.cancel(), true);
-  assert.equal(pan.isDragging(), false);
-  assert.equal(pan.isMode('select'), false);
 });
 
 test('revision gate ignores stale shared views', () => {

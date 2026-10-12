@@ -101,43 +101,11 @@
     if (event.shiftKey) return event.code === 'KeyE' ? 'eraser-soft' : null;
     const tools = {
       KeyV: 'select', KeyP: 'pen', KeyR: 'rect', KeyC: 'circle',
-      KeyL: 'line', KeyT: 'text', KeyE: 'eraser',
+      KeyL: 'line', KeyT: 'text', KeyE: 'eraser', Space: 'pan',
     };
     return tools[event.code] || null;
   }
 
-  function createPanState() {
-    let spaceDown = false;
-    let dragging = false;
-    return {
-      isMode: (tool) => tool === 'pan' || spaceDown,
-      isDragging: () => dragging,
-      pressSpace() { spaceDown = true; },
-      begin(tool) {
-        if (tool !== 'pan' && !spaceDown) return false;
-        dragging = true;
-        return true;
-      },
-      releaseSpace(tool) {
-        spaceDown = false;
-        if (tool === 'pan') return false;
-        const wasDragging = dragging;
-        dragging = false;
-        return wasDragging;
-      },
-      end() {
-        const wasDragging = dragging;
-        dragging = false;
-        return wasDragging;
-      },
-      cancel() {
-        spaceDown = false;
-        const wasDragging = dragging;
-        dragging = false;
-        return wasDragging;
-      },
-    };
-  }
 
   function createRevisionGate(apply) {
     let latestRevision = -1;
@@ -382,7 +350,6 @@
     createRenderScheduler,
     createWheelZoomBatcher,
     toolFromShortcut,
-    createPanState,
     createSnapshotReceiver,
     createRevisionGate,
     createObjectIndex,
