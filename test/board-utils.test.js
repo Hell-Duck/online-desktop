@@ -4,17 +4,35 @@ const assert = require('node:assert/strict');
 const {
   applyTextSnapshot,
   createRenderScheduler,
+  createWheelZoomBatcher,
   createRevisionGate,
   createObjectIndex,
   createTextBatcher,
   createTextPreviewGate,
   createTextSessionSync,
+  createSnapshotReceiver,
+  encodeImageWithinLimit,
+  eraserDelta,
+  objectChanges,
   createTrailingThrottle,
   fitWithin,
   replaceCanvasObjectPreservingStack,
   transformFromView,
   viewFromTransform,
 } = require('../public/board-utils');
+
+test('compact object changes omit image data and eraser sends only newly added path', () => {
+  const before = { id: 'a', type: 'image', src: '/board-assets/' + 'a'.repeat(64), left: 0,
+    eraser: { objects: [{ path: [1] }] } };
+  const after = { ...before, left: 20, eraser: { objects: [...before.eraser.objects, { path: [2] }] } };
+  assert.deepEqual(objectChanges(before, after), { left: 20 });
+  assert.deepEqual(eraserDelta(before, after), { baseCount: 1,
+    eraser: { objects: [{ path: [2] }] } });
+  const receiver = createSnapshotReceiver();
+  assert.equal(receiver.accept({ session: 's', index: 0, total: 1, version: 1,
+    data: JSON.stringify({ version: 1, objects: [after] }) }), true);
+  assert.deepEqual(receiver.result().objects, [after]);
+});
 
 function createFakeClock() {
   let now = 0;
@@ -100,6 +118,22 @@ test('render scheduler combines requests into one animation frame', () => {
   assert.equal(frames.length, 1);
 });
 
+test('wheel zoom batches deltas within one frame and keeps the latest pointer', () => {
+  const frames = [];
+  const applied = [];
+  const wheel = createWheelZoomBatcher((delta, point) => applied.push({ delta, point }),
+    (fn) => frames.push(fn));
+  wheel(20, { x: 1, y: 2 });
+  wheel(-5, { x: 3, y: 4 });
+  wheel(2, { x: 5, y: 6 });
+  assert.equal(frames.length, 1);
+  frames.shift()();
+  assert.deepEqual(applied, [{ delta: 17, point: { x: 5, y: 6 } }]);
+  wheel(7, { x: 8, y: 9 });
+  frames.shift()();
+  assert.equal(applied[1].delta, 7);
+});
+
 test('revision gate ignores stale shared views', () => {
   const applied = [];
   const accept = createRevisionGate((view) => applied.push(view.revision));
@@ -172,6 +206,23 @@ test('fitWithin preserves ratio and never enlarges a small image', () => {
     height: 600,
     scale: 1,
   });
+});
+
+test('image encoding reduces dimensions until PNG fits without changing transparency format', async () => {
+  const attempts = [];
+  const source = { naturalWidth: 1200, naturalHeight: 600 };
+  const encoded = await encodeImageWithinLimit(source, 'image/png', 20, () => ({
+    getContext() { return { drawImage() {} }; },
+    toBlob(callback, type) {
+      attempts.push({ width: this.width, height: this.height, type });
+      callback({ size: this.width > 600 ? 30 : 15, type });
+    },
+  }));
+  assert.equal(encoded.size, 15);
+  assert.deepEqual(attempts, [
+    { width: 1200, height: 600, type: 'image/png' },
+    { width: 600, height: 300, type: 'image/png' },
+  ]);
 });
 
 test('replacing a synchronized object preserves its canvas layer', () => {
