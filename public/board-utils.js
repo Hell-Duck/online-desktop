@@ -96,6 +96,16 @@
     };
   }
 
+  function toolFromShortcut(event) {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return null;
+    if (event.shiftKey) return event.code === 'KeyE' ? 'eraser-soft' : null;
+    const tools = {
+      KeyV: 'select', KeyP: 'pen', KeyR: 'rect', KeyC: 'circle',
+      KeyL: 'line', KeyT: 'text', KeyE: 'eraser',
+    };
+    return tools[event.code] || null;
+  }
+
   function createRevisionGate(apply) {
     let latestRevision = -1;
     return function accept(view) {
@@ -338,6 +348,7 @@
     applyTextSnapshot,
     createRenderScheduler,
     createWheelZoomBatcher,
+    toolFromShortcut,
     createSnapshotReceiver,
     createRevisionGate,
     createObjectIndex,

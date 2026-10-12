@@ -992,6 +992,12 @@ function start(room) {
     }
     const ao = canvas.getActiveObject();
     if (ao && ao.isEditing) return; // в режиме текста отдаём отмену браузеру
+    const shortcutTool = BoardUtils.toolFromShortcut(e);
+    if (shortcutTool) {
+      e.preventDefault();
+      setTool(shortcutTool);
+      return;
+    }
     // Ctrl+Z — отмена; Ctrl+Shift+Z или Ctrl+Y — повтор. Сравниваем по e.code (любая раскладка).
     if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ' && !e.shiftKey) {
       e.preventDefault();

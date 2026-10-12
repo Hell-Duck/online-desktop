@@ -5,6 +5,7 @@ const {
   applyTextSnapshot,
   createRenderScheduler,
   createWheelZoomBatcher,
+  toolFromShortcut,
   createRevisionGate,
   createObjectIndex,
   createTextBatcher,
@@ -132,6 +133,24 @@ test('wheel zoom batches deltas within one frame and keeps the latest pointer', 
   wheel(7, { x: 8, y: 9 });
   frames.shift()();
   assert.equal(applied[1].delta, 7);
+});
+
+test('tool shortcuts use physical keys regardless of keyboard layout', () => {
+  const shortcuts = [
+    ['KeyV', 'select'], ['KeyP', 'pen'], ['KeyR', 'rect'],
+    ['KeyC', 'circle'], ['KeyL', 'line'], ['KeyT', 'text'], ['KeyE', 'eraser'],
+  ];
+  for (const [code, tool] of shortcuts) {
+    assert.equal(toolFromShortcut({ code, key: 'a' }), tool);
+    assert.equal(toolFromShortcut({ code, key: 'я' }), tool);
+  }
+  assert.equal(toolFromShortcut({ code: 'KeyE', shiftKey: true }), 'eraser-soft');
+  assert.equal(toolFromShortcut({ code: 'KeyR', shiftKey: true }), null);
+  assert.equal(toolFromShortcut({ code: 'KeyC', ctrlKey: true }), null);
+  assert.equal(toolFromShortcut({ code: 'KeyV', metaKey: true }), null);
+  assert.equal(toolFromShortcut({ code: 'KeyP', altKey: true }), null);
+  assert.equal(toolFromShortcut({ code: 'KeyP', repeat: true }), null);
+  assert.equal(toolFromShortcut({ code: 'KeyA' }), null);
 });
 
 test('revision gate ignores stale shared views', () => {
