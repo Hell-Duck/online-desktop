@@ -6,6 +6,8 @@ const {
   createRenderScheduler,
   createWheelZoomBatcher,
   toolFromShortcut,
+  applyCanvasCursor,
+  shouldCreateText,
   createRevisionGate,
   createObjectIndex,
   createTextBatcher,
@@ -154,6 +156,27 @@ test('tool shortcuts use physical keys regardless of keyboard layout', () => {
   assert.equal(toolFromShortcut({ code: 'Space', repeat: true }), null);
   assert.equal(toolFromShortcut({ code: 'Space', ctrlKey: true }), null);
   assert.equal(toolFromShortcut({ code: 'KeyA' }), null);
+});
+
+test('canvas cursor follows the drawing tool and stays closed throughout panning', () => {
+  const canvas = { setCursor(value) { this.cursor = value; } };
+  applyCanvasCursor(canvas, 'pan', false);
+  assert.deepEqual([canvas.defaultCursor, canvas.hoverCursor, canvas.moveCursor, canvas.cursor],
+    ['grab', 'grab', 'grab', 'grab']);
+  applyCanvasCursor(canvas, 'pan', true);
+  assert.deepEqual([canvas.defaultCursor, canvas.hoverCursor, canvas.moveCursor, canvas.cursor],
+    ['grabbing', 'grabbing', 'grabbing', 'grabbing']);
+  applyCanvasCursor(canvas, 'pen', false);
+  assert.deepEqual([canvas.defaultCursor, canvas.hoverCursor, canvas.cursor],
+    ['crosshair', 'crosshair', 'crosshair']);
+  applyCanvasCursor(canvas, 'select', false);
+  assert.equal(canvas.cursor, 'default');
+});
+
+test('selecting after text mode never creates another text object on a click', () => {
+  assert.equal(shouldCreateText('text'), true);
+  assert.equal(shouldCreateText('select'), false);
+  assert.equal(shouldCreateText('pen'), false);
 });
 
 test('revision gate ignores stale shared views', () => {

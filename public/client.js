@@ -557,7 +557,7 @@ function start(room) {
     toolButtons.forEach((b) => b.classList.toggle('active', b.dataset.tool === tool));
     canvas.isDrawingMode = tool === 'pen' || isEraserTool(tool);
     canvas.selection = tool === 'select';
-    canvas.defaultCursor = tool === 'pan' ? 'grab' : (tool === 'select' ? 'default' : 'crosshair');
+    BoardUtils.applyCanvasCursor(canvas, tool);
     canvas.forEachObject((o) => (o.selectable = tool === 'select'));
     if (tool === 'pen') {
       canvas.freeDrawingBrush = penBrush;
@@ -705,7 +705,7 @@ function start(room) {
   function finishPan() {
     canvas.setViewportTransform(canvas.viewportTransform.slice()); // обновить координаты выбора после сдвига
     canvas.selection = currentTool === 'select';
-    canvas.setCursor(currentTool === 'pan' ? 'grab' : (currentTool === 'select' ? 'default' : 'crosshair'));
+    BoardUtils.applyCanvasCursor(canvas, currentTool);
     publishView();
     sendView.flush();
   }
@@ -763,19 +763,12 @@ function start(room) {
     t.enterEditing(); t.selectAll();
   }
 
-  // Двойной клик ЛКМ по пустому месту (в режиме выделения) -> новый блок текста
-  canvas.on('mouse:dblclick', (opt) => {
-    if (opt.target || currentTool !== 'select') return; // по объекту или в другом инструменте — не создаём
-    const p = canvas.getPointer(opt.e);
-    createTextAt(p.x, p.y);
-  });
-
   canvas.on('mouse:down', (opt) => {
     // Перемещение полотна инструментом «рука» (в том числе после пробела)
     if (currentTool === 'pan') {
       isPanning = true;
       canvas.selection = false;
-      canvas.setCursor('grabbing');
+      BoardUtils.applyCanvasCursor(canvas, currentTool, true);
       lastPosX = opt.e.clientX;
       lastPosY = opt.e.clientY;
       return;
@@ -785,7 +778,7 @@ function start(room) {
     const p = canvas.getPointer(opt.e);
     startX = p.x; startY = p.y;
 
-    if (currentTool === 'text') {
+    if (BoardUtils.shouldCreateText(currentTool)) {
       createTextAt(p.x, p.y);
       setTool('select');
       return;
@@ -805,6 +798,7 @@ function start(room) {
       lastPosX = opt.e.clientX;
       lastPosY = opt.e.clientY;
       renderPanFrame();
+      BoardUtils.applyCanvasCursor(canvas, currentTool, true);
       return;
     }
     if (!draft) return;

@@ -106,6 +106,20 @@
     return tools[event.code] || null;
   }
 
+  function applyCanvasCursor(canvas, tool, dragging = false) {
+    const cursor = tool === 'pan' ? (dragging ? 'grabbing' : 'grab')
+      : (tool === 'select' ? 'default' : 'crosshair');
+    canvas.defaultCursor = cursor;
+    canvas.hoverCursor = tool === 'select' ? 'move' : cursor;
+    canvas.moveCursor = tool === 'select' ? 'move' : cursor;
+    canvas.freeDrawingCursor = 'crosshair';
+    canvas.setCursor(cursor);
+  }
+
+  function shouldCreateText(tool) {
+    return tool === 'text';
+  }
+
   function createRevisionGate(apply) {
     let latestRevision = -1;
     function accept(view) {
@@ -351,6 +365,8 @@
     createRenderScheduler,
     createWheelZoomBatcher,
     toolFromShortcut,
+    applyCanvasCursor,
+    shouldCreateText,
     createSnapshotReceiver,
     createRevisionGate,
     createObjectIndex,
