@@ -24,6 +24,20 @@
     };
   }
 
+  function cursorOffsetFromClient(clientX, clientY, rect) {
+    return {
+      offsetX: clientX - rect.left - rect.width / 2,
+      offsetY: clientY - rect.top - rect.height / 2,
+    };
+  }
+
+  function cursorScreenPoint(cursor, vpt, width, height) {
+    if (Number.isFinite(cursor.offsetX) && Number.isFinite(cursor.offsetY)) {
+      return { x: width / 2 + cursor.offsetX, y: height / 2 + cursor.offsetY };
+    }
+    return { x: vpt[0] * cursor.x + vpt[4], y: vpt[3] * cursor.y + vpt[5] };
+  }
+
   function createTrailingThrottle(fn, intervalMs, timers = {}) {
     const now = timers.now || (() => Date.now());
     const setTimer = timers.setTimeout || ((cb, ms) => setTimeout(cb, ms));
@@ -381,5 +395,7 @@
     replaceCanvasObjectPreservingStack,
     transformFromView,
     viewFromTransform,
+    cursorOffsetFromClient,
+    cursorScreenPoint,
   };
 });

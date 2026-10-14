@@ -22,6 +22,8 @@ const {
   replaceCanvasObjectPreservingStack,
   transformFromView,
   viewFromTransform,
+  cursorOffsetFromClient,
+  cursorScreenPoint,
 } = require('../public/board-utils');
 
 test('compact object changes omit image data and eraser sends only newly added path', () => {
@@ -70,6 +72,22 @@ test('shared scene center survives different viewport sizes', () => {
   assert.deepEqual(large, [2, 0, 0, 2, 600, 350]);
   assert.deepEqual(viewFromTransform(small, 800, 600), view);
   assert.deepEqual(viewFromTransform(large, 1600, 900), view);
+});
+
+test('stationary remote pointer stays fixed when the shared board pans or zooms', () => {
+  const rect = { left: 52, top: 52, width: 1000, height: 700 };
+  const offset = cursorOffsetFromClient(752, 252, rect);
+  assert.deepEqual(offset, { offsetX: 200, offsetY: -150 });
+  const cursor = { ...offset, x: 800, y: 500 };
+  const first = cursorScreenPoint(cursor, [1, 0, 0, 1, -100, -200], 800, 600);
+  const moved = cursorScreenPoint(cursor, [2, 0, 0, 2, -900, -1200], 800, 600);
+  assert.deepEqual(first, { x: 600, y: 150 });
+  assert.deepEqual(moved, first);
+});
+
+test('old cursor packets still use scene coordinates', () => {
+  const point = cursorScreenPoint({ x: 100, y: 50 }, [2, 0, 0, 2, 30, 40], 800, 600);
+  assert.deepEqual(point, { x: 230, y: 140 });
 });
 
 test('trailing throttle sends first and final values without flooding', () => {

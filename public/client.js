@@ -1127,13 +1127,13 @@ function start(room) {
 
   /* --- Курсор для другого участника --- */
   let sharingCursor = false;
-  const remoteCursors = {}; // from -> { x, y, visible, el }
+  const remoteCursors = {}; // from -> { x, y, offsetX, offsetY, visible, el }
   const cursorLayer = document.getElementById('cursorLayer');
   cursorLayer.style.display = 'block';
 
   function cursorEl(from) {
     let c = remoteCursors[from];
-    if (!c) c = remoteCursors[from] = { x: null, y: null, visible: false, el: null, ptr: null, edge: null };
+    if (!c) c = remoteCursors[from] = { x: null, y: null, offsetX: null, offsetY: null, visible: false, el: null, ptr: null, edge: null };
     if (!c.el) {
       const el = document.createElement('div');
       el.className = 'remote-cursor';
@@ -1151,10 +1151,9 @@ function start(room) {
   }
   function placeCursor(c) {
     if (!c.el) return;
-    if (!(c.visible && c.x != null)) { c.el.style.display = 'none'; return; }
-    const vpt = canvas.viewportTransform; // сцена -> экран (без вращения)
+    if (!(c.visible && (c.x != null || Number.isFinite(c.offsetX)))) { c.el.style.display = 'none'; return; }
     const W = cursorLayer.clientWidth, H = cursorLayer.clientHeight;
-    const sx = vpt[0] * c.x + vpt[4], sy = vpt[3] * c.y + vpt[5];
+    const { x: sx, y: sy } = BoardUtils.cursorScreenPoint(c, canvas.viewportTransform, W, H);
     c.el.style.display = 'block';
     if (sx >= 0 && sx <= W && sy >= 0 && sy <= H) {
       // курсор в видимой области — обычный указатель
@@ -1178,12 +1177,17 @@ function start(room) {
 
   socket.on('cursor', (d) => {
     const c = cursorEl(d.from);
-    if (d.visible) { c.x = d.x; c.y = d.y; c.visible = true; } else { c.visible = false; }
+    if (d.visible) {
+      c.x = d.x; c.y = d.y;
+      c.offsetX = Number.isFinite(d.offsetX) ? d.offsetX : null;
+      c.offsetY = Number.isFinite(d.offsetY) ? d.offsetY : null;
+      c.visible = true;
+    } else { c.visible = false; }
     placeCursor(c);
   });
 
-  const sendCursor = (x, y, visible) => socket.emit('cursor', visible ? { x, y, visible: true } : { visible: false });
-  const sendCursorPosition = BoardUtils.createTrailingThrottle((x, y) => sendCursor(x, y, true), 40);
+  const sendCursor = (x, y, visible, offset) => socket.emit('cursor', visible ? { x, y, ...offset, visible: true } : { visible: false });
+  const sendCursorPosition = BoardUtils.createTrailingThrottle((x, y, offset) => sendCursor(x, y, true, offset), 40);
 
   function hideSharedCursor() {
     sendCursorPosition.cancel();
@@ -1194,7 +1198,8 @@ function start(room) {
     if (!sharingCursor) return;
     const p = clientToScene(e.clientX, e.clientY);
     if (!p) return; // курсор над тулбаром/вне доски — не обновляем
-    sendCursorPosition(p.x, p.y);
+    const offset = BoardUtils.cursorOffsetFromClient(e.clientX, e.clientY, canvas.upperCanvasEl.getBoundingClientRect());
+    sendCursorPosition(p.x, p.y, offset);
   });
   // мышь ушла за пределы окна сайта или вкладка скрыта -> курсор у других исчезает
   document.addEventListener('mouseleave', () => { if (sharingCursor) hideSharedCursor(); });
