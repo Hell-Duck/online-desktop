@@ -199,11 +199,14 @@ function start(room) {
     drainCommands();
   }
   socket.on('connect', () => {
+    acceptRemoteView.reset(); // после перезапуска сервера счётчик вида начинается с единицы
+    sendView.cancel();
     resync('Подключение…');
     socket.emit('join', { room, initialView: currentView() });
     socket.emit('scene:sync');
   });
   socket.on('disconnect', () => {
+    sendView.cancel();
     ++syncEpoch;
     pending = [];
     sending = false;
@@ -554,7 +557,7 @@ function start(room) {
     toolButtons.forEach((b) => b.classList.toggle('active', b.dataset.tool === tool));
     canvas.isDrawingMode = tool === 'pen' || isEraserTool(tool);
     canvas.selection = tool === 'select';
-    canvas.defaultCursor = tool === 'pan' ? 'grab' : (tool === 'select' ? 'default' : 'crosshair');
+    BoardUtils.applyCanvasCursor(canvas, tool);
     canvas.forEachObject((o) => (o.selectable = tool === 'select'));
     if (tool === 'pen') {
       canvas.freeDrawingBrush = penBrush;
@@ -698,8 +701,19 @@ function start(room) {
   applyColor(currentColor);
 
   /* --- Навигация: общий для комнаты масштаб и положение полотна --- */
-  let isPanning = false, lastPosX = 0, lastPosY = 0, spaceDown = false;
-  const isPanMode = () => currentTool === 'pan' || spaceDown;
+  let isPanning = false, lastPosX = 0, lastPosY = 0;
+  function finishPan() {
+    canvas.setViewportTransform(canvas.viewportTransform.slice()); // обновить координаты выбора после сдвига
+    canvas.selection = currentTool === 'select';
+    BoardUtils.applyCanvasCursor(canvas, currentTool);
+    publishView();
+    sendView.flush();
+  }
+  function cancelPanDrag() {
+    if (!isPanning) return;
+    isPanning = false;
+    finishPan();
+  }
   const renderPanFrame = BoardUtils.createRenderScheduler(() => {
     canvas.calcViewportBoundaries();
     canvas.requestRenderAll();
@@ -721,19 +735,9 @@ function start(room) {
     opt.e.stopPropagation();
   });
 
-  // Пробел временно включает «руку» (как в графических редакторах)
-  window.addEventListener('keydown', (e) => {
-    if (e.code === 'Space' && !isTypingInField()) {
-      const ao = canvas.getActiveObject();
-      if (ao && ao.isEditing) return; // печатаем пробел в тексте
-      spaceDown = true;
-      canvas.defaultCursor = 'grab';
-      e.preventDefault();
-    }
-  });
-  window.addEventListener('keyup', (e) => {
-    if (e.code === 'Space') { spaceDown = false; canvas.defaultCursor = currentTool === 'select' ? 'default' : 'crosshair'; }
-  });
+  // Отмена незаконченного перетаскивания при переключении окна.
+  window.addEventListener('blur', cancelPanDrag);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) cancelPanDrag(); });
 
   // Сброс вида: масштаб 1, позиция в начало
   document.getElementById('resetViewBtn').onclick = () => {
@@ -759,19 +763,12 @@ function start(room) {
     t.enterEditing(); t.selectAll();
   }
 
-  // Двойной клик ЛКМ по пустому месту (в режиме выделения) -> новый блок текста
-  canvas.on('mouse:dblclick', (opt) => {
-    if (opt.target || currentTool !== 'select') return; // по объекту или в другом инструменте — не создаём
-    const p = canvas.getPointer(opt.e);
-    createTextAt(p.x, p.y);
-  });
-
   canvas.on('mouse:down', (opt) => {
-    // перемещение полотна (инструмент «рука» или зажатый пробел)
-    if (isPanMode()) {
+    // Перемещение полотна инструментом «рука» (в том числе после пробела)
+    if (currentTool === 'pan') {
       isPanning = true;
       canvas.selection = false;
-      canvas.setCursor('grabbing');
+      BoardUtils.applyCanvasCursor(canvas, currentTool, true);
       lastPosX = opt.e.clientX;
       lastPosY = opt.e.clientY;
       return;
@@ -781,7 +778,7 @@ function start(room) {
     const p = canvas.getPointer(opt.e);
     startX = p.x; startY = p.y;
 
-    if (currentTool === 'text') {
+    if (BoardUtils.shouldCreateText(currentTool)) {
       createTextAt(p.x, p.y);
       setTool('select');
       return;
@@ -801,6 +798,7 @@ function start(room) {
       lastPosX = opt.e.clientX;
       lastPosY = opt.e.clientY;
       renderPanFrame();
+      BoardUtils.applyCanvasCursor(canvas, currentTool, true);
       return;
     }
     if (!draft) return;
@@ -818,11 +816,7 @@ function start(room) {
   canvas.on('mouse:up', () => {
     if (isPanning) {
       isPanning = false;
-      canvas.setViewportTransform(canvas.viewportTransform.slice()); // обновить координаты выбора после сдвига
-      canvas.selection = currentTool === 'select';
-      canvas.setCursor(isPanMode() ? 'grab' : 'default');
-      publishView();
-      sendView.flush();
+      finishPan();
       return;
     }
     if (!draft) return;
@@ -992,6 +986,12 @@ function start(room) {
     }
     const ao = canvas.getActiveObject();
     if (ao && ao.isEditing) return; // в режиме текста отдаём отмену браузеру
+    const shortcutTool = BoardUtils.toolFromShortcut(e);
+    if (shortcutTool) {
+      e.preventDefault();
+      setTool(shortcutTool);
+      return;
+    }
     // Ctrl+Z — отмена; Ctrl+Shift+Z или Ctrl+Y — повтор. Сравниваем по e.code (любая раскладка).
     if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ' && !e.shiftKey) {
       e.preventDefault();
@@ -1127,13 +1127,13 @@ function start(room) {
 
   /* --- Курсор для другого участника --- */
   let sharingCursor = false;
-  const remoteCursors = {}; // from -> { x, y, visible, el }
+  const remoteCursors = {}; // from -> { x, y, offsetX, offsetY, visible, el }
   const cursorLayer = document.getElementById('cursorLayer');
   cursorLayer.style.display = 'block';
 
   function cursorEl(from) {
     let c = remoteCursors[from];
-    if (!c) c = remoteCursors[from] = { x: null, y: null, visible: false, el: null, ptr: null, edge: null };
+    if (!c) c = remoteCursors[from] = { x: null, y: null, offsetX: null, offsetY: null, visible: false, el: null, ptr: null, edge: null };
     if (!c.el) {
       const el = document.createElement('div');
       el.className = 'remote-cursor';
@@ -1151,10 +1151,9 @@ function start(room) {
   }
   function placeCursor(c) {
     if (!c.el) return;
-    if (!(c.visible && c.x != null)) { c.el.style.display = 'none'; return; }
-    const vpt = canvas.viewportTransform; // сцена -> экран (без вращения)
+    if (!(c.visible && (c.x != null || Number.isFinite(c.offsetX)))) { c.el.style.display = 'none'; return; }
     const W = cursorLayer.clientWidth, H = cursorLayer.clientHeight;
-    const sx = vpt[0] * c.x + vpt[4], sy = vpt[3] * c.y + vpt[5];
+    const { x: sx, y: sy } = BoardUtils.cursorScreenPoint(c, canvas.viewportTransform, W, H);
     c.el.style.display = 'block';
     if (sx >= 0 && sx <= W && sy >= 0 && sy <= H) {
       // курсор в видимой области — обычный указатель
@@ -1178,12 +1177,17 @@ function start(room) {
 
   socket.on('cursor', (d) => {
     const c = cursorEl(d.from);
-    if (d.visible) { c.x = d.x; c.y = d.y; c.visible = true; } else { c.visible = false; }
+    if (d.visible) {
+      c.x = d.x; c.y = d.y;
+      c.offsetX = Number.isFinite(d.offsetX) ? d.offsetX : null;
+      c.offsetY = Number.isFinite(d.offsetY) ? d.offsetY : null;
+      c.visible = true;
+    } else { c.visible = false; }
     placeCursor(c);
   });
 
-  const sendCursor = (x, y, visible) => socket.emit('cursor', visible ? { x, y, visible: true } : { visible: false });
-  const sendCursorPosition = BoardUtils.createTrailingThrottle((x, y) => sendCursor(x, y, true), 40);
+  const sendCursor = (x, y, visible, offset) => socket.emit('cursor', visible ? { x, y, ...offset, visible: true } : { visible: false });
+  const sendCursorPosition = BoardUtils.createTrailingThrottle((x, y, offset) => sendCursor(x, y, true, offset), 40);
 
   function hideSharedCursor() {
     sendCursorPosition.cancel();
@@ -1194,7 +1198,8 @@ function start(room) {
     if (!sharingCursor) return;
     const p = clientToScene(e.clientX, e.clientY);
     if (!p) return; // курсор над тулбаром/вне доски — не обновляем
-    sendCursorPosition(p.x, p.y);
+    const offset = BoardUtils.cursorOffsetFromClient(e.clientX, e.clientY, canvas.upperCanvasEl.getBoundingClientRect());
+    sendCursorPosition(p.x, p.y, offset);
   });
   // мышь ушла за пределы окна сайта или вкладка скрыта -> курсор у других исчезает
   document.addEventListener('mouseleave', () => { if (sharingCursor) hideSharedCursor(); });

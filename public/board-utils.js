@@ -24,6 +24,20 @@
     };
   }
 
+  function cursorOffsetFromClient(clientX, clientY, rect) {
+    return {
+      offsetX: clientX - rect.left - rect.width / 2,
+      offsetY: clientY - rect.top - rect.height / 2,
+    };
+  }
+
+  function cursorScreenPoint(cursor, vpt, width, height) {
+    if (Number.isFinite(cursor.offsetX) && Number.isFinite(cursor.offsetY)) {
+      return { x: width / 2 + cursor.offsetX, y: height / 2 + cursor.offsetY };
+    }
+    return { x: vpt[0] * cursor.x + vpt[4], y: vpt[3] * cursor.y + vpt[5] };
+  }
+
   function createTrailingThrottle(fn, intervalMs, timers = {}) {
     const now = timers.now || (() => Date.now());
     const setTimer = timers.setTimeout || ((cb, ms) => setTimeout(cb, ms));
@@ -96,14 +110,40 @@
     };
   }
 
+  function toolFromShortcut(event) {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return null;
+    if (event.shiftKey) return event.code === 'KeyE' ? 'eraser-soft' : null;
+    const tools = {
+      KeyV: 'select', KeyP: 'pen', KeyR: 'rect', KeyC: 'circle',
+      KeyL: 'line', KeyT: 'text', KeyE: 'eraser', Space: 'pan',
+    };
+    return tools[event.code] || null;
+  }
+
+  function applyCanvasCursor(canvas, tool, dragging = false) {
+    const cursor = tool === 'pan' ? (dragging ? 'grabbing' : 'grab')
+      : (tool === 'select' ? 'default' : 'crosshair');
+    canvas.defaultCursor = cursor;
+    canvas.hoverCursor = tool === 'select' ? 'move' : cursor;
+    canvas.moveCursor = tool === 'select' ? 'move' : cursor;
+    canvas.freeDrawingCursor = 'crosshair';
+    canvas.setCursor(cursor);
+  }
+
+  function shouldCreateText(tool) {
+    return tool === 'text';
+  }
+
   function createRevisionGate(apply) {
     let latestRevision = -1;
-    return function accept(view) {
+    function accept(view) {
       if (!view || !Number.isFinite(view.revision) || view.revision <= latestRevision) return false;
       latestRevision = view.revision;
       apply(view);
       return true;
-    };
+    }
+    accept.reset = () => { latestRevision = -1; };
+    return accept;
   }
 
   function createObjectIndex() {
@@ -338,6 +378,9 @@
     applyTextSnapshot,
     createRenderScheduler,
     createWheelZoomBatcher,
+    toolFromShortcut,
+    applyCanvasCursor,
+    shouldCreateText,
     createSnapshotReceiver,
     createRevisionGate,
     createObjectIndex,
@@ -352,5 +395,7 @@
     replaceCanvasObjectPreservingStack,
     transformFromView,
     viewFromTransform,
+    cursorOffsetFromClient,
+    cursorScreenPoint,
   };
 });

@@ -5,6 +5,9 @@ const {
   applyTextSnapshot,
   createRenderScheduler,
   createWheelZoomBatcher,
+  toolFromShortcut,
+  applyCanvasCursor,
+  shouldCreateText,
   createRevisionGate,
   createObjectIndex,
   createTextBatcher,
@@ -19,6 +22,8 @@ const {
   replaceCanvasObjectPreservingStack,
   transformFromView,
   viewFromTransform,
+  cursorOffsetFromClient,
+  cursorScreenPoint,
 } = require('../public/board-utils');
 
 test('compact object changes omit image data and eraser sends only newly added path', () => {
@@ -67,6 +72,22 @@ test('shared scene center survives different viewport sizes', () => {
   assert.deepEqual(large, [2, 0, 0, 2, 600, 350]);
   assert.deepEqual(viewFromTransform(small, 800, 600), view);
   assert.deepEqual(viewFromTransform(large, 1600, 900), view);
+});
+
+test('stationary remote pointer stays fixed when the shared board pans or zooms', () => {
+  const rect = { left: 52, top: 52, width: 1000, height: 700 };
+  const offset = cursorOffsetFromClient(752, 252, rect);
+  assert.deepEqual(offset, { offsetX: 200, offsetY: -150 });
+  const cursor = { ...offset, x: 800, y: 500 };
+  const first = cursorScreenPoint(cursor, [1, 0, 0, 1, -100, -200], 800, 600);
+  const moved = cursorScreenPoint(cursor, [2, 0, 0, 2, -900, -1200], 800, 600);
+  assert.deepEqual(first, { x: 600, y: 150 });
+  assert.deepEqual(moved, first);
+});
+
+test('old cursor packets still use scene coordinates', () => {
+  const point = cursorScreenPoint({ x: 100, y: 50 }, [2, 0, 0, 2, 30, 40], 800, 600);
+  assert.deepEqual(point, { x: 230, y: 140 });
 });
 
 test('trailing throttle sends first and final values without flooding', () => {
@@ -134,6 +155,48 @@ test('wheel zoom batches deltas within one frame and keeps the latest pointer', 
   assert.equal(applied[1].delta, 7);
 });
 
+test('tool shortcuts use physical keys regardless of keyboard layout', () => {
+  const shortcuts = [
+    ['KeyV', 'select'], ['KeyP', 'pen'], ['KeyR', 'rect'],
+    ['KeyC', 'circle'], ['KeyL', 'line'], ['KeyT', 'text'], ['KeyE', 'eraser'],
+    ['Space', 'pan'],
+  ];
+  for (const [code, tool] of shortcuts) {
+    assert.equal(toolFromShortcut({ code, key: 'a' }), tool);
+    assert.equal(toolFromShortcut({ code, key: 'я' }), tool);
+  }
+  assert.equal(toolFromShortcut({ code: 'KeyE', shiftKey: true }), 'eraser-soft');
+  assert.equal(toolFromShortcut({ code: 'KeyR', shiftKey: true }), null);
+  assert.equal(toolFromShortcut({ code: 'KeyC', ctrlKey: true }), null);
+  assert.equal(toolFromShortcut({ code: 'KeyV', metaKey: true }), null);
+  assert.equal(toolFromShortcut({ code: 'KeyP', altKey: true }), null);
+  assert.equal(toolFromShortcut({ code: 'KeyP', repeat: true }), null);
+  assert.equal(toolFromShortcut({ code: 'Space', repeat: true }), null);
+  assert.equal(toolFromShortcut({ code: 'Space', ctrlKey: true }), null);
+  assert.equal(toolFromShortcut({ code: 'KeyA' }), null);
+});
+
+test('canvas cursor follows the drawing tool and stays closed throughout panning', () => {
+  const canvas = { setCursor(value) { this.cursor = value; } };
+  applyCanvasCursor(canvas, 'pan', false);
+  assert.deepEqual([canvas.defaultCursor, canvas.hoverCursor, canvas.moveCursor, canvas.cursor],
+    ['grab', 'grab', 'grab', 'grab']);
+  applyCanvasCursor(canvas, 'pan', true);
+  assert.deepEqual([canvas.defaultCursor, canvas.hoverCursor, canvas.moveCursor, canvas.cursor],
+    ['grabbing', 'grabbing', 'grabbing', 'grabbing']);
+  applyCanvasCursor(canvas, 'pen', false);
+  assert.deepEqual([canvas.defaultCursor, canvas.hoverCursor, canvas.cursor],
+    ['crosshair', 'crosshair', 'crosshair']);
+  applyCanvasCursor(canvas, 'select', false);
+  assert.equal(canvas.cursor, 'default');
+});
+
+test('selecting after text mode never creates another text object on a click', () => {
+  assert.equal(shouldCreateText('text'), true);
+  assert.equal(shouldCreateText('select'), false);
+  assert.equal(shouldCreateText('pen'), false);
+});
+
 test('revision gate ignores stale shared views', () => {
   const applied = [];
   const accept = createRevisionGate((view) => applied.push(view.revision));
@@ -142,6 +205,17 @@ test('revision gate ignores stale shared views', () => {
   assert.equal(accept({ revision: 3 }), false);
   assert.equal(accept({ revision: 5 }), true);
   assert.deepEqual(applied, [4, 5]);
+});
+
+test('shared view accepts a fresh revision series after reconnect', () => {
+  const applied = [];
+  const accept = createRevisionGate((view) => applied.push(view.centerX));
+  assert.equal(accept({ revision: 42, centerX: 10 }), true);
+  assert.equal(accept({ revision: 1, centerX: 20 }), false);
+  accept.reset();
+  assert.equal(accept({ revision: 1, centerX: 20 }), true);
+  assert.equal(accept({ revision: 1, centerX: 30 }), false);
+  assert.deepEqual(applied, [10, 20]);
 });
 
 test('object index replaces, removes, clears, and rebuilds objects by id', () => {
